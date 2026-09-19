@@ -1,0 +1,50 @@
+export default {
+    name: null,
+    authKey: null,
+    geo: null,
+    avatar: null,
+    language: 'english',
+    theme: 'classic',
+    extrapolation: 0,
+    chat: {
+      alwaysHide: false,
+      opacity: 0.8,
+      height: 200,
+      neverHide: true
+    },
+    cursor: {
+      neverHide: true
+    },
+    sound: {
+      chat: true,
+      crowd: true,
+      main: true,
+      highlight: true,
+      gain: 1,
+    },
+    renderer: {
+      webGPU: true,
+      discLineWidth: 4,
+      generalLineWidth: 3,
+      resolutionScale: 1,
+      showTeamColors: true,
+      showAvatars: true,
+      showChatIndicators: true,
+      showFPS: true,
+      showInputLag: true,
+      showNetGraph: true,
+      targetFPS: 80,
+      displayMode: 'windowed',
+      resolution: 'native',
+      zoomCoeff: 1.0,
+      immediateRender: false,
+      playerAvatarTexturePath: null
+    },
+    keys: {
+      up: ["KeyW", "ArrowUp"],
+      down: ["KeyS", "ArrowDown"],
+      left: ["KeyA", "ArrowLeft"],
+      right: ["KeyD", "ArrowRight"],
+      kick: ["Space", "KeyX", "CtrlLeft"],
+    },
+}
