@@ -1,244 +1,107 @@
-# node-haxball-client
+# Haxball Live Tactical Overlay
 
-A custom desktop client for [HaxBall](https://www.haxball.com/) built with React, Vite, and NW.js. It uses the [node-haxball](https://github.com/wxyz-abcd/node-haxball) library and provides a fully featured UI with extended capabilities beyond the original web client.
+Personal project: computer-assisted analysis on top of live Haxball games (line of sight, heatmaps, passing lanes, and similar decision-support overlays), built as a fork of the official-ish open-source Haxball client.
 
-## Features
+**Status: data layer done, first live overlay feature (momentum/direction arrows) built and confirmed working, plus a shared overlay control menu (master authority + per-feature toggles + team filter).** See [Status / Next Steps](#status--next-steps).
 
-- **Custom Resolution Support** — Set any resolution, including native monitor resolutions and custom sizes
-- **Fullscreen with Resolution Override** — Change your monitor's display resolution while in fullscreen mode
-- **Unlocked FPS** — Bypass browser frame rate limits
-- **Theming System** — Choose from 3 built-in themes (Classic, Midnight, Emerald) or create your own with a visual editor
-- **Theme Import/Export** — Share custom themes as JSON files
-- **Multi-language Support** — Localization system with language loaders
-- **High-Performance Rendering (WebGPU)** — 
-The client includes a custom PIXI.js renderer that supports both WebGL and the newer **WebGPU** API. WebGPU can offer significantly better performance and lower CPU usage on supported hardware.
+## Base codebase
 
-## Installation
+- **[node-haxball](https://github.com/wxyz-abcd/node-haxball)** — the underlying engine/API. Reimplements Haxball's networking, physics, and room protocol in JS. We consume its `Room`, `Stadium`, `Disc`/`Player` objects read-only; nothing here modifies the engine itself.
+- **[node-haxball-client](https://github.com/wxyz-abcd/node-haxball-client)** — the desktop client we forked (React 19 + Vite + NW.js + PIXI.js). This is the actual app we run (`npm run dev`); it provides room join/create UI, rendering, chat, etc. Our data layer and overlay are wired into its existing `Game.jsx` and `renderer.js`.
 
-1. Go to the [Releases](https://github.com/wxyz-abcd/node-haxball-client/releases) page.
-2. Download the latest `.zip` file for your platform (Windows or Linux).
-3. Extract the contents to a folder.
-4. Run `node-haxball-client.exe` (Windows) or `node-haxball-client` (Linux).
+## Domain notes (how Haxball actually works — read before writing analytics)
 
-## Development
+These came out of discussion before building anything, and every analytics/overlay decision needs to respect them:
 
-If you want to contribute or build from source:
+- **Players have no orientation, ever.** Confirmed directly from node-haxball's own type declarations — `Player`/`Disc`/`MovableDisc` have no `angle`/`heading`/`facing` field of any kind. A player is a circle with a position and a velocity, nothing more.
+- **"Facing" only exists at the moment of a kick, and only then.** When a player is in kick range of the ball, the kick direction is the straight line through the player's center and the ball's center at that instant — that geometry *is* the direction, not a stored heading. Off the ball, "facing" is undefined, not fuzzy or approximate — there's nothing to infer it from, and nothing should try.
+- **Everything has width — treat it as circles, not points.** Players and the ball both have a live `radius` (map-dependent, read fresh every tick, never hardcoded). Segments/planes are zero-width collision lines with no "wall thickness" field; the effective collision boundary against one is that segment/plane's position offset outward by whichever disc's radius is approaching it (subject to `cMask`/`cGroup` matching). Any future LOS ray or passing lane needs to account for the ball's/players' actual radius, not treat them as infinitely thin points or lines.
 
-### Prerequisites
+## What's built
 
-- **Node.js** >= 18.x (recommended: 22.x)
-- **npm** >= 9.x
-- **Windows** 7 SP1+ (required for display resolution switching)
-- **PowerShell** (used for display management on Windows)
+Lives in `src/features/analytics/` (data + overlay logic) and `src/features/game/components/` (overlay UI), wired into `src/features/game/Game.jsx` and (for the camera transform) `src/features/game/renderer.js`.
 
-### Setup
+| File | Purpose | Permanent or debug-only? |
+|---|---|---|
+| `gameStateExtractor.js` | Converts node-haxball's live `room` object into clean, normalized snapshots (stadium geometry once per map, player/ball state every tick). | **Permanent.** Everything else depends on this. |
+| `useHaxballAnalytics.js` | React hook wiring the extractor into the live `room` via `onAfterGameTick`. Tick-rate home for heavier, non-visual-critical analytics (LOS, passing lanes, logging). | **Permanent** (scaffolding). Its *contents* will grow. |
+| `momentumOverlay.js` | Direction-only movement arrows for in-game players and the ball — the first live overlay feature. Render-rate, not tick-rate (see below). Team-filterable (see [Overlay controls](#overlay-controls-master-authority--per-feature-toggles--team-filter)). | **Permanent.** First piece of the actual overlay. |
+| `components/OverlayControls.jsx` | Bottom-right menu: master `enabled` authority (separate from feature toggles) + independent per-feature checkboxes (registry: `OVERLAY_FEATURES`) + shared Red/Blue/Both team filter. | **Permanent.** Shared overlay infrastructure. |
+| `snapshotLogger.js` | Writes tick-by-tick data to an NDJSON file + prints a console heartbeat, for validating the extractor and capturing sessions to test analytics offline. | **Debug tool.** Off by default (see [Logging toggle](#logging-toggle)). Not part of the live overlay's runtime path. |
+| `loadSession.js` | Standalone offline helper — reads back an NDJSON session file and groups frames by which map/geometry was active. Never runs inside the live client. | **Debug/dev tool.** |
+
+## Two different rates: tick-rate analytics vs. render-rate overlay
+
+This distinction matters and shaped the momentum overlay's design:
+
+- **Tick-rate** (`useHaxballAnalytics`, `onAfterGameTick`): fires once per physics simulation tick. Good for logging and for analytics that don't need to visually track a moving object every displayed frame.
+- **Render-rate** (`onRequestAnimationFrame` in `renderer.js`, currently only used by the momentum overlay): fires once per *rendered* frame, which can run at a different rate than physics ticks. The game renderer itself re-extrapolates room state and recomputes the camera transform fresh every rendered frame — anything meant to visually sit on top of a moving player has to do the same, or it will visibly lag/desync.
+
+### The camera transform (why the overlay is pixel-perfect)
+
+`renderer.js` draws everything through a transform that updates every frame:
+```
+screenX = (mapX - cameraOrigin.x) * cameraScale + canvasWidth/2
+screenY = (mapY - cameraOrigin.y) * cameraScale + canvasHeight/2
+```
+`cameraOrigin`/`cameraScale` were previously private closure variables inside `renderer.js`, inaccessible to anything outside it. We added a small, purely additive patch (6 lines, right after the camera updates each frame) exposing them as `thisRenderer.cameraOrigin`/`cameraScale`, so overlay code can reuse the game's own live transform instead of reimplementing the follow/zoom/clamp logic. Everything downstream — the momentum arrows, and any future overlay — reads these two values fresh every frame rather than caching or approximating them.
+
+### Momentum overlay specifics
+
+- **Direction only, no speed-based length.** Per design discussion: the point is seeing *which way* something is moving (backing off, charging forward, etc.), not encoding speed visually. Arrows are a fixed pixel length.
+- **Players and the ball**, styled distinctly (ball defaults to gold, players to white) so they're distinguishable at a glance.
+- **Adaptive "moderate" movement threshold**, not a hardcoded number — derived from the *current map's own* `playerPhysics` (`acceleration / (1 - damping)` as an estimated running speed). Players use ~35% of that as the cutoff; the ball uses a much smaller ~5%, since it has no acceleration/damping-driven "terminal speed" the way a self-propelled player does — it only decelerates via damping unless kicked, so its threshold just needs to filter out damping residue near a full stop, not gate on "clearly committed movement." Both are read live from the current stadium, never hardcoded, since player physics differ per map.
+- **Ball access note:** there's no `getBall()`-equivalent on the extrapolated `RoomState` (only `getPlayer(id)`). The renderer itself reads the ball as `gameState.physicsState.discs[0]` — disc index 0 is always the ball, confirmed both from `renderer.js`'s own usage and node-haxball's `GameState.physicsState: World` type — so the overlay uses that exact same documented path.
+- **Rendered on a separate `<canvas>`** layered exactly over the game canvas (not injected into the game's own PIXI scene graph, which gets destroyed/recreated on stadium changes and isn't exposed anyway), redrawn every `requestAnimationFrame` using the exposed camera transform.
+- **Tunable at the call site in `Game.jsx`** or via defaults in `momentumOverlay.js`: threshold fractions (`estimateModerateSpeedThreshold`/`estimateBallSpeedThreshold`), and per-item style (`color`/`lengthPx`/`lineWidth` for players, `ballColor`/`ballLengthPx`/`ballLineWidth` for the ball) via the `style` argument to `drawMomentumArrows`.
+
+## Overlay controls (master authority + per-feature toggles + team filter)
+
+A bottom-right menu (`OverlayControls.jsx`) controls three independent things every overlay feature — momentum now, LOS/passing-lanes/etc. later — reads from the same place, rather than each building its own toggle:
+
+- **`enabled`** — the master authority. Deliberately **decoupled** from `features`, not derived from or merged into it: it's a separate AND-gate checked on top of whatever the per-feature checkboxes say. Turn `enabled` off and a feature's checkbox can still show checked underneath — nothing computes or renders either way, canvas included. This was an explicit correction mid-build: an earlier version folded "on/off" into a single feature toggle when there was only one feature (momentum), which coupled "is the overlay system on" with "is this specific feature on" — those needed to be separable once more features arrived.
+- **`features`** — a per-feature on/off map (`{ momentum: true, ... }`), each entirely independent of the others. Any combination — just momentum, just passing lanes, several at once, none — is directly expressible. Registered in `OverlayControls.OVERLAY_FEATURES` (`[{ key, label }, ...]`); the checkbox list renders itself from that array, so adding a new overlay feature later means one new registry entry + one matching default in `Game.jsx`'s initial state + one gating check in the draw loop — no UI rewrite. Feature checkboxes stay interactive regardless of `enabled`, so a feature can be pre-selected while the overlay is off and it's already configured when switched on.
+- **`team`** — `"both" | 1 | 2` (red/blue, matching Haxball's own numeric team convention used everywhere else in this codebase). Shared across all features — one team filter, not one per feature. `getMomentumDirections` filters players by this; the ball is unaffected by it (it doesn't belong to a team) and only depends on `enabled` + the momentum feature toggle.
+
+**Session-only, by design** — no persistence to player settings/localStorage. Resets to `{ enabled: true, team: "both", features: { momentum: true } }` every time the app opens.
+
+**A React gotcha worth remembering if more controls get added here:** the render-loop callback (`onRequestAnimationFrame`) is created once, when the renderer is constructed — it does *not* re-run on every React render. Reading `overlaySettings` (a `useState` value) directly inside it would capture a stale snapshot from whenever the renderer was built, not the current value. Fixed by mirroring the state into a ref (`overlaySettingsRef`, kept in sync via a `useEffect`) and reading `.current` inside the callback instead. Any future overlay-settings field needs the same treatment.
+
+**CSS lives appended to the end of `game.css`**, not a new file — this project only imports `game.css` and `fontello.css` globally (see `main.jsx`), so a separate stylesheet would've needed its own import wired up for no benefit.
+
+
+## Logging toggle
+
+`useHaxballAnalytics(roomRef, opts)` takes two independent flags:
+
+- **`enabled`** (default `true`) — master switch for the whole hook: tick extraction, stadium-change detection, tick-rate analytics.
+- **`logging`** (default `import.meta.env.DEV`) — controls *only* whether `SnapshotLogger` runs (NDJSON file + console heartbeat). Currently set explicitly in `Game.jsx`:
+```js
+useHaxballAnalytics(roomRef, { logging: false });
+```
+Flip to `{ logging: true }` whenever a session capture is needed, then back to `false` when done. With `logging: false`, `SnapshotLogger` is never constructed — no folder, no file, no console output — but tick extraction keeps running underneath regardless, since `enabled` (not `logging`) controls that.
+
+## Setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/wxyz-abcd/node-haxball-client.git
+git clone <your fork url>
 cd node-haxball-client
-
-# Install dependencies
+nvm use 22
 npm install
-
-# Start development server
 npm run dev
 ```
+Opens the actual NW.js desktop app (not a browser). Join/create a room, F12 for devtools console.
 
-The development environment uses **Vite** with HMR at `http://localhost:5173` and **NW.js** as the desktop shell.
+**Known gotcha:** if the game canvas is black on join but sound plays, disable WebGPU in Settings → Video (`webGPU` toggle) to fall back to the WebGL renderer — WebGPU texture allocation can fail silently on some Linux/driver combos.
 
-## Building
+## Status / Next steps
 
-### Preview build (local testing)
+**Done:**
+- Live data pipeline (extraction, per-tick player/ball state, per-map geometry, map-change handling, optional session recording).
+- Momentum/direction overlay for players and the ball — first working live overlay feature, confirmed pixel-accurate against the game's own camera.
+- Shared overlay control menu — master `enabled` authority, independent per-feature checkboxes (extensible registry), and a Red/Blue/Both team filter — reusable infrastructure any future overlay feature plugs into.
 
-```bash
-npm run preview
-```
-
-Builds the Vite production bundle, then opens it in NW.js locally.
-
-### Distribution builds
-
-```bash
-# Windows
-npm run dist:win
-
-# Linux
-npm run dist:linux
-
-# Both platforms
-npm run dist:all
-```
-
-Output goes to `../node-haxball-client-out/win` or `../node-haxball-client-out/linux`.
-
-### Zipped releases
-
-```bash
-# Windows (builds + zips)
-npm run zip:win
-
-# Linux (builds + zips)
-npm run zip:linux
-```
-
-Creates a `.zip` archive in `../node-haxball-client-out/`.
-
-## Project Structure
-
-```
-node-haxball-client/
-├── main.js                    # NW.js entry point (loads API, opens window)
-├── index.html                 # HTML shell
-├── vite.config.js             # Vite configuration
-├── package.json               # Dependencies, scripts, NW.js config
-├── resolutions.json           # Custom display resolutions (user-editable)
-│
-├── src/
-│   ├── main.jsx               # React entry point
-│   ├── App.jsx                # Router & main app component
-│   │
-│   ├── assets/
-│   │   ├── css/
-│   │   │   ├── game.css       # Main stylesheet (CSS variables for theming)
-│   │   │   ├── fontello.css   # Icon font
-│   │   │   └── flags.css      # Country flag sprites
-│   │   ├── font/              # Icon fonts
-│   │   ├── images/            # Backgrounds, sprites, icons
-│   │   └── sounds/            # Game sound effects
-│   │
-│   ├── components/            # Reusable UI components
-│   │   ├── SettingsPopup.jsx  # Settings dialog (tabs: Sound/Video/Input/Misc/Theme)
-│   │   ├── InputDialog.jsx    # Styled input prompt (replaces window.prompt)
-│   │   ├── Popup.jsx          # Generic popup overlay
-│   │   ├── Toggle.jsx         # Toggle switch component
-│   │   ├── SliderOption.jsx   # Slider setting component
-│   │   ├── SelectOption.jsx   # Dropdown setting component
-│   │   ├── NumericInput.jsx   # Numeric input with +/- buttons
-│   │   └── settingsTabs/      # Settings tab content
-│   │       ├── SoundContent.jsx
-│   │       ├── VideoContent.jsx
-│   │       ├── InputContent.jsx
-│   │       ├── MiscContent.jsx
-│   │       └── ThemeContent.jsx
-│   │
-│   ├── features/
-│   │   ├── game/              # In-game components
-│   │   │   ├── Game.jsx       # Main game container
-│   │   │   ├── renderer.js    # PIXI.js game renderer
-│   │   │   ├── gameInput.js   # Keyboard input handler
-│   │   │   └── components/    # Game UI (ChatBox, GameCanvas, GameStateGUI)
-│   │   ├── rooms/             # Room management
-│   │   │   ├── RoomList.jsx   # Room browser + hidden room join
-│   │   │   ├── JoinRoom.jsx   # Connection flow + password retry
-│   │   │   ├── CreateRoom.jsx # Room creation
-│   │   │   ├── CreateSandbox.jsx
-│   │   │   └── Headless.jsx   # Headless room mode
-│   │   └── player-data/       # Player name/avatar entry
-│   │
-│   ├── hooks/                 # React hooks
-│   │   ├── PlayerDataProvider.jsx  # Player data context (localStorage)
-│   │   ├── PlayerDataDefaultValues.js
-│   │   ├── usePlayerData.jsx
-│   │   ├── useLocalStorageState.js
-│   │   ├── useRoomJoin.jsx    # Room connection logic
-│   │   ├── useRoomCreate.jsx
-│   │   └── useWindowSettings.js  # Resolution & fullscreen management
-│   │
-│   ├── themes/                # Theme system
-│   │   ├── themes.js          # Built-in theme definitions (Classic, Midnight, Emerald)
-│   │   ├── ThemeContext.jsx   # Theme provider + file-based persistence
-│   │   ├── ThemeInitializer.jsx  # Bridge between PlayerData and ThemeProvider
-│   │   └── themeUtils.js      # Color manipulation (lighten/darken/expand)
-│   │
-│   └── utils/
-│       ├── screenResolution.js  # Windows display resolution via PowerShell/P-Invoke
-│       └── languageLoaders.js   # Dynamic language loading
-│
-└── themes/                    # Custom theme files (auto-created at runtime)
-    └── *.json                 # Saved custom themes
-```
-
-### Custom Themes
-
-Theme files are stored as JSON in the `themes/` directory next to the executable (or project root in dev mode). They can be created via **Settings → Theme → Create New**, or manually:
-
-```json
-{
-  "id": "my_theme",
-  "name": "My Theme",
-  "variables": {
-    "--bg-primary": "#1a2125",
-    "--btn-primary": "#244967",
-    "--text-primary": "#ffffff"
-  }
-}
-```
-
-See `src/themes/themes.js` for the full list of available CSS variables.
-
-## Contributing
-
-### Branch Structure
-
-- **`main`** — Stable releases
-- **`development`** — Active development branch
-
-### How to Contribute
-
-1. **Fork** the repository
-2. **Create a feature branch** from `development`:
-   ```bash
-   git checkout development
-   git checkout -b feature/my-feature
-   ```
-3. **Make your changes** and test them with `npm run dev`
-4. **Commit** with a descriptive message:
-   ```bash
-   git add .
-   git commit -m "Add: description of your feature"
-   ```
-5. **Push** your branch and open a **Pull Request** against `development`
-
-### Guidelines
-
-- Test your changes by running `npm run dev` and verifying the UI works correctly
-- If modifying `game.css`, use CSS custom properties (`var(--variable-name)`) for any colors to maintain theme compatibility
-- Follow existing patterns for new components (see `src/components/` for examples)
-- New settings should be added to `PlayerDataDefaultValues.js` with a sensible default
-- Keep commits focused — one feature/fix per commit when possible
-
-### Adding New Theme Variables
-
-If you add new CSS colors to `game.css`:
-1. Add the variable to the `:root` block at the top of `game.css`
-2. Use `var(--your-variable)` in the CSS rule instead of a hardcoded color
-3. Add the default value to all built-in themes in `src/themes/themes.js`
-4. Optionally add it to `VARIABLE_GROUPS` in `src/themes/themeUtils.js` to make it editable in the theme editor
-
-## Tech Stack
-
-| Technology | Purpose |
-|---|---|
-| [NW.js](https://nwjs.io/) | Desktop runtime (Chromium + Node.js) |
-| [Vite](https://vite.dev/) | Build tool & dev server with HMR |
-| [React 19](https://react.dev/) | UI framework |
-| [React Router](https://reactrouter.com/) | Client-side routing |
-| [node-haxball](https://github.com/nickreserved/node-haxball) | HaxBall backend API |
-| [PIXI.js](https://pixijs.com/) | Game rendering (via node-haxball) |
-| [perfect-scrollbar](https://github.com/mdbootstrap/perfect-scrollbar) | Custom scrollbars |
-
-## 🤗 Contributors
-* Lots of testing, bug reports, room search, and more by fran9
-* Lots of testing by magga
-* Lots of testing, mouse input idea and much more by captain tekla
-* Lots of testing in low-end pc by envvenena
-* Lots of testing and bug reports by francisco
-* tests and ideas by tutu
-* testing by enso
-* Lots of testing, advertisement, input improvement and bunch of ideas by yves
-* Haxball recaptcha integration by [abc](https://github.com/wxyz-abcd)
-
-## License
-
-[MIT](LICENSE)
+**Not started yet:**
+1. **Real analytics functions** — no LOS, heatmap, or passing-lane computation exists yet. Both reduce to raycasting against `segments`/`planes`, accounting for player/ball radius (see [Domain notes](#domain-notes-how-haxball-actually-works--read-before-writing-analytics)), and both should register in `OverlayControls.OVERLAY_FEATURES` and read the shared `enabled`/`team` overlay settings rather than adding their own toggle.
+2. **Kick-direction-based logic** — nothing yet uses the player-center → ball-center kick geometry described in the domain notes (e.g. predicting where a kick would send the ball).
+3. Everything else layered on top of the now-working overlay rendering path (arrows, cones, heatmap shading, etc. all now have a proven pixel-perfect place to draw, and a filtering mechanism to respect).
