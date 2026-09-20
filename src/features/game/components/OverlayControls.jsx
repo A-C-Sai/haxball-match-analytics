@@ -9,6 +9,7 @@ import React from "react";
  */
 export const OVERLAY_FEATURES = [
   { key: "momentum", label: "Momentum" },
+  { key: "trajectory", label: "Ball path" },
 ];
 
 /**
