@@ -7,6 +7,9 @@ runs unchanged in a live room, and vice versa.**
 Branch: `feat/replays`. This file is the running log — what the feature is,
 how it works, what was broken and why, and what is deliberately left out.
 
+See also: [README.md](README.md) for the project overview and roadmap, and
+[DOMAIN.md](DOMAIN.md) for game physics and pitfalls.
+
 ---
 
 ## Status
@@ -25,7 +28,8 @@ analytics tick loop running against it.
 | Transport (play/pause, speed, scrub) | Done |
 | Read-only room panel | Done |
 | Replay-specific settings | Done |
-| Stats/aggregation over a replay | Not started — see [Next](#next) |
+| NDJSON session capture from a replay | Done — see `README-session-event-capture.md` |
+| Stats/aggregation over a replay | Not started — see the [roadmap](README.md#roadmap) |
 
 ---
 
@@ -137,8 +141,15 @@ onAfterGameTick        0
 ```
 
 `useHaxballAnalytics` binds `onAfterGameTick`. Rather than fork the hook, the
-adapter subscribes to `onGameTick` and re-emits it. **If you add analytics
-that bind an `onAfterX` callback, add the bridge for it too.**
+adapter subscribes to `onGameTick` and re-emits it.
+
+**Correction (after `feat/session-event-capture`):** the original note here
+said to add a bridge for every new `onAfterX`. That is stronger than needed —
+the adapter already derives `onAfter${name.slice(2)}` for every entry in
+`FORWARDED_CALLBACKS` and invokes it. All eleven callbacks that branch binds
+(kicks, goals, three collision types, kick-off, positions reset, game
+lifecycle) bridged with no adapter change. **Only a genuinely new event needs
+adding to that list.**
 
 ### 3. Ball "teleporting outside the map" — part one: dropped events
 
@@ -296,6 +307,13 @@ Two guards, both in replay code:
   playback from turning kicks into a buzz. Well below what is distinguishable
   at 1x, so normal playback is untouched.
 
+**`isSeeking` has a second consumer.** `useHaxballAnalytics` reads
+`room.replay?.isSeeking` and suppresses its whole observer while a seek is in
+flight, for the same reason sound does: a seek re-fires every event in the
+traversed span, and a backward seek restarts from frame 0 so `frameNo` runs
+backwards. Recording that would write occurrences that never happened.
+Anything else added that reacts to events needs the same guard.
+
 Note that the adapter now owns `reader.onDestinationTimeReached` and forwards
 it to whatever `replay.onDestinationTimeReached` was set to, so it can clear
 the flag first. Assigning the reader's handler directly would break seeking.
@@ -400,10 +418,15 @@ only custom stadiums carry one.
 The overriding constraint: **normal gameplay, rooms, sandbox and headless
 must be untouched.** Verified against the branch point, not assumed.
 
-Untouched, byte-identical: `Game.jsx`, `renderer.js`, `gameInput.js`, the
-whole of `features/analytics/`, `ChatBox.jsx`, `OverlayControls.jsx`,
-`SettingsPopup.jsx`, `VideoContent.jsx`, `JoinRoom.jsx`, `CreateSandbox.jsx`,
-`PlayerDataDefaultValues.js`.
+Untouched, byte-identical **as of this branch**: `Game.jsx`, `renderer.js`,
+`gameInput.js`, the whole of `features/analytics/`, `ChatBox.jsx`,
+`OverlayControls.jsx`, `SettingsPopup.jsx`, `VideoContent.jsx`,
+`JoinRoom.jsx`, `CreateSandbox.jsx`, `PlayerDataDefaultValues.js`.
+
+`feat/session-event-capture` has since modified `features/analytics/` and
+`Game.jsx`. That does not weaken the rule — those changes are shared-path
+work that runs identically in live rooms and replays, which is exactly the
+property this branch was built to preserve.
 
 Modified, and **purely additive — zero lines removed**:
 
@@ -440,17 +463,3 @@ git diff --numstat <branch-point> -- src/App.jsx \
   src/features/rooms/RoomList.jsx src/assets/css/game.css
 # every line must show 0 deletions
 ```
-
----
-
-## Next
-
-- Stats over a whole replay — possession, passes, shots, heatmaps — by
-  running the reader headlessly at high speed and aggregating from
-  `extractFrame`. A full pass over the reference recording takes a few
-  seconds at `setSpeed(5000)`.
-- Batch mode: point it at a folder of `.hbr2` files and emit one NDJSON
-  session per file, feeding `loadSession.js`.
-- Goal markers / event timeline on the scrubber (goals must be detected from
-  the simulation, not read from the file — see §format).
-- Snapshot-based rewind if backward scrubbing becomes a bottleneck.

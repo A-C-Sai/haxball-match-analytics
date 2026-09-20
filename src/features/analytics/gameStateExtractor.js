@@ -61,6 +61,34 @@ export function extractStadiumGeometry(room) {
     team: g.team?.id ?? null, // 1 = red, 2 = blue
   }));
 
+  // Static discs: goal posts, and on custom maps whole barriers built out of
+  // discs. These are REAL collision geometry and are easy to forget, because
+  // "the walls" reads like it means segments and planes. It does not — a map
+  // can stop a player with a line of discs that appears nowhere in either.
+  //
+  // Index 0 is conventionally the ball's template disc, so treat these as
+  // obstacles from index 1 onward unless the mask says otherwise.
+  const discs = (s.discs ?? []).map((d, index) => ({
+    index,
+    pos: { x: d.pos.x, y: d.pos.y },
+    radius: d.radius,
+    bCoef: d.bCoef,
+    invMass: d.invMass,
+    damping: d.damping,
+    cMask: d.cMask,
+    cGroup: d.cGroup,
+  }));
+
+  // Joints tie discs together (swinging nets and the like). Captured because
+  // a jointed disc can move, so treating every stadium disc as static is only
+  // safe when this list is empty.
+  const joints = (s.joints ?? []).map((j) => ({
+    d0: j.d0 ?? null,
+    d1: j.d1 ?? null,
+    length: j.length ?? null,
+    strength: j.strength ?? null,
+  }));
+
   const pp = s.playerPhysics ?? {};
 
   return {
@@ -76,6 +104,8 @@ export function extractStadiumGeometry(room) {
     segments,
     planes,
     goals,
+    discs,
+    joints,
     redSpawnPoints: (s.redSpawnPoints ?? []).map((p) => ({ x: p.x, y: p.y })),
     blueSpawnPoints: (s.blueSpawnPoints ?? []).map((p) => ({ x: p.x, y: p.y })),
     playerPhysics: {
@@ -151,6 +181,15 @@ export function extractFrame(room, opts = {}) {
 
   const ball = normalizeDisc(room.getBall(useExt));
 
+  // GamePlayState + its counters. `state` is the engine's own finite state
+  // machine (0 BeforeKickOff, 1 Playing, 2 AfterGoal, 3 Ending) — see
+  // node-haxball's GamePlayState enum. Analytics almost always want to gate
+  // on `state === 1`, and collision behaviour genuinely differs before
+  // kick-off (CollisionFlags has redKO/blueKO variants that only apply until
+  // the kick-off event), so this is an input to the geometry, not just a
+  // display gate. Null when no game is running.
+  const gs = room.gameState;
+
   return {
     frameNo: room.currentFrameNo,
     timestampMs: Date.now(),
@@ -159,5 +198,8 @@ export function extractFrame(room, opts = {}) {
     redScore: room.redScore,
     blueScore: room.blueScore,
     timeElapsed: room.timeElapsed,
+    playState: gs?.state ?? null,
+    goalTickCounter: gs?.goalTickCounter ?? null,
+    paused: gs?.paused ?? null,
   };
 }

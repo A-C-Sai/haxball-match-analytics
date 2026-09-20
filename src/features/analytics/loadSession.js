@@ -25,6 +25,9 @@ import fs from "fs";
  *   geometryByVersion: Map<number, Object>,   // version -> geometry record
  *   framesByVersion: Map<number, Object[]>,   // version -> frames recorded while it was active
  *   allFrames: Object[],                      // every frame, in original order
+ *   allEvents: Object[],                      // every event, in original order
+ *   eventsByType: Map<string, Object[]>,      // "playerBallKick" -> events
+ *   eventsByFrameNo: Map<number, Object[]>,   // tick -> events that fired on it
  * }}
  */
 export function loadSession(filePath) {
@@ -33,6 +36,15 @@ export function loadSession(filePath) {
   const geometryByVersion = new Map();
   const framesByVersion = new Map();
   const allFrames = [];
+  const allEvents = [];
+  const eventsByType = new Map();
+  const eventsByFrameNo = new Map();
+
+  const push = (map, key, value) => {
+    const bucket = map.get(key);
+    if (bucket) bucket.push(value);
+    else map.set(key, [value]);
+  };
 
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
@@ -46,11 +58,23 @@ export function loadSession(filePath) {
       }
     } else if (record.type === "frame") {
       allFrames.push(record);
-      const bucket = framesByVersion.get(record.geometryVersion);
-      if (bucket) bucket.push(record);
-      else framesByVersion.set(record.geometryVersion, [record]); // frame arrived before its geometry line, shouldn't happen but don't drop data
+      // frame arrived before its geometry line — shouldn't happen, but don't drop data
+      push(framesByVersion, record.geometryVersion, record);
+    } else if (record.type === "event") {
+      allEvents.push(record);
+      push(eventsByType, record.event, record);
+      // frameNo is null if an event fired before the first tick was recorded
+      if (record.frameNo != null) push(eventsByFrameNo, record.frameNo, record);
     }
   }
 
-  return { geometries, geometryByVersion, framesByVersion, allFrames };
+  return {
+    geometries,
+    geometryByVersion,
+    framesByVersion,
+    allFrames,
+    allEvents,
+    eventsByType,
+    eventsByFrameNo,
+  };
 }

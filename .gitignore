@@ -32,3 +32,6 @@ out
 *.njsproj
 *.sln
 *.sw?
+
+# Analytics session captures
+analytics-sessions
