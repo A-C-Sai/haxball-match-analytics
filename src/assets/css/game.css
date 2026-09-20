@@ -3704,3 +3704,125 @@ a:hover {
     outline: 2px solid var(--text-primary);
     outline-offset: -2px;
 }
+
+/* ---------------------------------------------------------------------------
+   Replay playback (src/features/replay/)
+
+   Scoped entirely to the replay screen. `.replay-bottom` is an extra class on
+   that screen's `.bottom-section`, so nothing here can reach the live game's
+   own bottom section.
+
+   The read-only room panel (ReplayRoomInfo) has NO rules here on purpose — it
+   reuses the live `.room-view` / `.player-list-view` / `.player-list-item`
+   markup so it inherits the real panel's styling, centring, team colours and
+   admin highlight from the rules above.
+   --------------------------------------------------------------------------- */
+
+/* Chat history + transport as one centred column.
+   The selector must be at least as specific as `.game-view>.bottom-section`,
+   which sets `align-items: flex-end`. In a column flexbox align-items is the
+   HORIZONTAL axis, so inheriting flex-end pinned this panel to the right. */
+.game-view>.bottom-section.replay-bottom {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+/* `.chatbox-view` centres itself for the live layout via `left: 50%` and auto
+   margins; inside this centred flex column that would push it off-centre. */
+.game-view>.bottom-section.replay-bottom .chatbox-view {
+    left: 0;
+    margin: 0;
+    width: 800px;
+    max-width: 90%;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+}
+
+.replay-transport {
+    /* Flush against the bottom of the chat box — no gap, matching width, and
+       only the bottom corners rounded, so the two read as one panel. */
+    width: 800px;
+    max-width: 90%;
+    box-sizing: border-box;
+    padding: 8px 12px;
+    background-color: var(--bg-primary);
+    border-bottom-left-radius: 5px;
+    border-bottom-right-radius: 5px;
+    color: var(--text-primary);
+    user-select: none;
+}
+
+.replay-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+}
+
+.replay-controls-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.replay-controls-row button {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border: none;
+    border-radius: 4px;
+    padding: 4px 12px;
+    cursor: pointer;
+}
+
+.replay-controls-row button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.replay-controls-speed {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.replay-controls-readout {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.85;
+}
+
+.replay-controls-scrubber {
+    width: 100%;
+    margin: 0;
+}
+
+.replay-controls-filename {
+    font-size: 11px;
+    opacity: 0.6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* The room panel's team headers are real join buttons in the live markup, so
+   they arrive already styled and team-coloured. They are disabled here —
+   there is nothing to join in a recording — so stop them looking clickable
+   without dimming the team colour away. */
+.room-view .player-list-view button[data-hook=join-btn]:disabled {
+    opacity: 1;
+    cursor: default;
+}
+
+.replay-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    height: 100%;
+    color: var(--text-primary);
+}

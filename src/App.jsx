@@ -6,6 +6,7 @@ import CreateRoom from "./features/rooms/CreateRoom";
 import JoinRoom from "./features/rooms/JoinRoom";
 import CreateSandbox from "./features/rooms/CreateSandbox";
 import Headless from "./features/rooms/Headless";
+import ReplayView from "./features/replay/ReplayView";
 import { usePlayerData } from "./hooks/usePlayerData";
 import { languageLoaders } from "./utils/languageLoaders";
 import { useWindowSettings } from "./hooks/useWindowSettings";
@@ -46,6 +47,7 @@ useEffect(() => {
       <Route path="/JoinRoom/:id" element={<JoinRoom />} />
       <Route path="/CreateSandbox" element={<CreateSandbox />} />
       <Route path="/Headless" element={<Headless />} />
+      <Route path="/Replay" element={<ReplayView />} />
     </Routes>
   );
 }
