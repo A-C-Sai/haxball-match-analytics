@@ -6,6 +6,8 @@ import SettingsPopup from "../../components/SettingsPopup.jsx";
 import Popup from "../../components/Popup.jsx";
 import InputDialog from "../../components/InputDialog.jsx";
 import { usePlayerData } from "../../hooks/usePlayerData.jsx";
+import { readReplayFile } from "../replay/replayRoomAdapter.js";
+import { setPendingReplay } from "../replay/pendingReplay.js";
 
 const RoomListItem = memo(({ room, isSelected, onClick, onDoubleClick }) => {
   const flagClass = "flagico " + "f-" + room.data.flag;
@@ -167,6 +169,29 @@ function RoomList() {
   const goToNameForm = useCallback(() => navigate('/'), [navigate]);
   const goToHeadless = useCallback(() => navigate('/Headless'), [navigate]);
   const goToSandbox = useCallback(() => navigate('/CreateSandbox'), [navigate]);
+
+  /**
+   * The .hbr2 file input used to be decorative — it opened the OS file picker
+   * and nothing else happened (same in upstream node-haxball-client). The
+   * bytes are read here and handed to /Replay through `pendingReplay`, rather
+   * than through router state, so a multi-megabyte buffer never gets written
+   * into a history entry.
+   *
+   * The input's value is cleared afterwards so picking the *same* file twice
+   * in a row still fires `onChange`.
+   */
+  const handleReplayFile = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const bytes = await readReplayFile(file);
+      setPendingReplay({ bytes, fileName: file.name });
+      navigate('/Replay');
+    } catch (err) {
+      console.error("Could not read replay file:", err);
+    }
+  }, [navigate]);
 
   useEffect(() => {
     refresh();
@@ -336,6 +361,7 @@ function RoomList() {
                     type="file"
                     accept=".hbr2"
                     data-hook="replayfile"
+                    onChange={handleReplayFile}
                   ></input>
                 </div>
                 <button onClick={handleSettings} data-hook="settings">
