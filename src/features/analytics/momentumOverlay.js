@@ -32,7 +32,7 @@ function estimateTerminalSpeed(playerPhysics) {
 
 /**
  * @param {Object} playerPhysics stadium.playerPhysics for the CURRENT map (read live, not cached)
- * @param {number} [fraction=0.35] fraction of estimated terminal speed to use as the "moderate" cutoff
+ * @param {number} [fraction=0.10] fraction of estimated terminal speed to use as the "moderate" cutoff
  */
 export function estimateModerateSpeedThreshold(playerPhysics, fraction = 0.10) {
   return estimateTerminalSpeed(playerPhysics) * fraction;

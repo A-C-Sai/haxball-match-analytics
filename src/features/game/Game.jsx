@@ -54,7 +54,7 @@ function Sound(volume) {
 
 export default function Game({ roomRef, usingCustomAPI }) {
   const API = useMemo(()=>(usingCustomAPI || window.API), [usingCustomAPI]);
-  useHaxballAnalytics(roomRef, { logging: false });
+  useHaxballAnalytics(roomRef, { logging: true });
   const { player, setPlayerField } = usePlayerData();
   const [roomName, setRoomName] = useState(null);
   const [stadiumName, setStadiumName] = useState(null);

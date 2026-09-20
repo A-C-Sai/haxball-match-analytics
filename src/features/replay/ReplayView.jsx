@@ -156,7 +156,7 @@ export default function ReplayView() {
   // Runs against the adapter exactly as it runs against a live room. The
   // adapter re-emits the reader's `onGameTick` as `onAfterGameTick`, which is
   // what this hook binds (replay readers never fire the `onAfter*` variants).
-  useHaxballAnalytics(roomRef, { enabled: ready, logging: false });
+  useHaxballAnalytics(roomRef, { enabled: ready, logging: true });
 
   const leave = useCallback(() => navigate("/RoomList"), [navigate]);
 
