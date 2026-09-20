@@ -110,6 +110,12 @@ function chainRoomCallback(room, name, observer) {
  * @param {number} [opts.consoleHeartbeatTicks=60]
  * @param {number} [opts.sampleEveryNTicks=1] frame sampling only; events are
  *   never sampled.
+ * @param {((room:any, frame:any, geometry:any)=>void)|null} [opts.onTick=null]
+ *   Per-tick seam for live overlay analytics. Runs independently of
+ *   `logging`, is skipped during replay seeks like every other observer, and
+ *   is held in a ref so passing an inline arrow does not re-subscribe the
+ *   room callbacks on every render. Exceptions are caught and logged — an
+ *   overlay bug must not kill the tick handler.
  */
 export default function useHaxballAnalytics(roomRef, opts = {}) {
   const {
@@ -118,8 +124,17 @@ export default function useHaxballAnalytics(roomRef, opts = {}) {
     captureCollisions = true,
     consoleHeartbeatTicks = 60,
     sampleEveryNTicks = 1,
+    onTick = null,
   } = opts;
   const loggerRef = useRef(null);
+
+  // Held in a ref, NOT in the effect's dependency array. Callers pass an
+  // inline arrow, which is a new function identity every render — as a
+  // dependency that would tear down and re-chain all eleven room callbacks
+  // on every render. The ref lets the effect subscribe exactly once while
+  // still calling the latest callback.
+  const onTickRef = useRef(onTick);
+  onTickRef.current = onTick;
 
   useEffect(() => {
     if (!enabled) return;
@@ -162,15 +177,24 @@ export default function useHaxballAnalytics(roomRef, opts = {}) {
         if (logger) logger.writeFrame(frame);
 
         // --- seam for live overlay analytics, independent of `logging` ---
-        // e.g. const lanes = computePassingLanes(frame, geometry);
-        //      overlayStateRef.current = { frame, geometry, lanes };
+        // `onTick` runs whether or not a session is being recorded: overlays
+        // must work with logging off, which is the normal case.
         //
         // NOTE for anything stateful added here: a backward seek rewinds room
         // state wholesale and restores the original player list with no join
         // events, so any map keyed by player id silently goes stale. The
         // replay adapter's `rebuildRendererAfterSeek` is the rebuild point —
         // hook into it rather than inventing a second one.
-        void geometry;
+        //
+        // Throwing here would kill the tick handler for the rest of the
+        // session, so a bad overlay cannot take the game down with it.
+        if (onTickRef.current) {
+          try {
+            onTickRef.current(room, frame, geometry);
+          } catch (err) {
+            console.error("[haxball-analytics] onTick threw:", err);
+          }
+        }
       })
     );
 

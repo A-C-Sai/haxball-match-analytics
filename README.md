@@ -18,6 +18,8 @@ what follows.
 | [DOMAIN.md](DOMAIN.md) | How the game works, verified findings, pitfalls. Branch-agnostic. |
 | [README-replay.md](README-replay.md) | `feat/replays` — `.hbr2` playback |
 | [README-session-event-capture.md](README-session-event-capture.md) | `feat/session-event-capture` — data layer + physics validation |
+| [README-ball-trajectory.md](README-ball-trajectory.md) | `feat/ball-trajectory` — live ball path overlay at true ball width |
+| [README-aim-assist.md](README-aim-assist.md) | `feat/aim-assist` — what a kick *would* do. Planned, not started |
 
 **Read [DOMAIN.md](DOMAIN.md) before writing any analytics.** Several
 plausible feature ideas die on that page, and every pitfall listed there cost
@@ -31,14 +33,25 @@ real debugging time to find.
 | --- | --- |
 | `feat/replays` | ~~Merged~~ — `.hbr2` playback, shared renderer, analytics hook runs unmodified |
 | `feat/session-event-capture` | ~~Complete~~ — events + game state captured, reachable-zone formula validated at 100% |
-| *next* | Analytics boundary decision, then the zone primitive in the live path |
+| `feat/ball-trajectory` | ~~Complete~~ — tick-exact ball predictor (p99 2.4e-13), live overlay drawn at the ball's true width |
+| *next* | `feat/aim-assist` — what a kick *would* do. Kick mechanics are measured ([DOMAIN.md § Kicking](DOMAIN.md#kicking)), so it is mostly wiring |
 
 **What exists:** a working data layer (per-tick extraction, per-map geometry,
-engine events, NDJSON session logging), replay playback as a test bench, and
-one overlay feature — momentum arrows.
+engine events, NDJSON session logging), replay playback as a test bench, a
+tick-exact ball trajectory predictor with a validator behind it, and two
+overlay features — momentum arrows and the ball path.
 
-**What does not:** any analytics function. No LOS, no passing lanes, no
-dominance.
+**What does not:** any analytics function about *players*. No LOS, no passing
+lanes, no dominance, no commitment. Everything shipped so far is about the
+ball, which is the easy half — the ball has no intentions and cannot
+accelerate itself.
+
+**The framing lesson so far.** Both shipped overlays are *descriptive*: they
+show what is already happening, which is largely what the eye supplies. The
+ball-path branch made that concrete — it is accurate to floating point and
+still mostly restates the visible. The valuable class is *predictive*: what
+would happen if you acted. That is what `feat/aim-assist` is, and why it comes
+before anything else on the list.
 
 ### The momentum overlay, and what it was actually for
 
@@ -508,7 +521,7 @@ drawn line. Feeds item 9.
 
 ### Geometry
 
-**8. The raycast primitive**
+**8. The raycast primitive** — *partly delivered early by `feat/ball-trajectory`*
 
 *What:* `canReach(from, to, radius, cGroup, cMask)` — is the straight line
 between two points clear for *this specific entity*, accounting for segments,
@@ -517,8 +530,14 @@ planes, discs and vertices.
 the ball's size and collision mask". Player 4 walks through a boundary the ball
 bounces off. The collision-mask bug that nearly shipped (see DOMAIN.md
 § Pitfalls) was exactly this mistake made earlier.
+*Status:* `ballTrajectory.js` already does the hard half — per-entity geometry
+filtering, straight and curved segments, vertices, planes and static discs,
+all validated against the engine. It answers the *bouncing* case a
+straight-line `canReach` cannot. What remains is the cheap early-out form: a
+boolean "is this segment clear" that does not simulate. Extract it from the
+same collision set rather than writing new geometry code.
 
-**9. The aiming gate**
+**9. The aiming gate** — *mechanics now verified, see [DOMAIN.md § Kicking](DOMAIN.md#kicking)*
 
 *What:* for each candidate target, the angle you must turn through and the
 ticks that takes (θ and `t_θ`), plus the cone of directions you can currently
@@ -527,6 +546,11 @@ deliver into.
 overlay would list passes that are geometrically open and physically
 impossible. Built as a filter inside the feasibility layer — never a drawn cone
 on screen, which would just be clutter.
+*Status:* the kick itself is now fully measured — range, impulse, direction,
+arming behaviour and the pass/trap threshold. Enough to build a live aim
+assist, which is the predictive feature the trajectory overlay turned out not
+to be. Note the measured trap: a facing-ray aim assist is wrong by up to 50°
+whenever the ball is moving.
 
 **10. Cheap availability metrics**
 
@@ -624,6 +648,11 @@ value. Read honestly:
   Reaching it sooner is worth more than completing the ones before it.
 - **Items 16 and 17 should be justified before being built,** for opposite
   reasons — one is review-oriented, the other is visually impressive.
+- **Item 8 arrived early, out of order, and that was right.** It came out of
+  `feat/ball-trajectory` because the ball's path is the one thing on the pitch
+  that is exactly predictable, so it was the cheapest place to build and prove
+  real collision geometry. Take the same opportunity elsewhere when it appears
+  — the ordering below is a default, not a queue to be respected.
 
 A reasonable re-ordering, if speed to something valuable matters more than
 tidiness: **5 → 6 → 8 → 7 → 9 → 12 → 14**, with 3, 4 and 11 pulled in the
@@ -669,4 +698,4 @@ Chain defensively — see `chainRoomCallback` in `useHaxballAnalytics.js`.
 ## License
 
 MIT. See [LICENSE](LICENSE). The upstream client's README is preserved as
-[ORIGINAL_REPO_README.md](ORIGINAL_REPO_README.md).
+[README-original.md](README-original.md).

@@ -29,6 +29,7 @@ import { useCallback } from "react";
 import SoundButton from "./components/SoundButton.jsx";
 import useHaxballAnalytics from "../analytics/useHaxballAnalytics.js";
 import { estimateModerateSpeedThreshold, estimateBallSpeedThreshold, getMomentumDirections, getBallMomentumDirection, drawMomentumArrows } from "../analytics/momentumOverlay.js";
+import { computeBallTrace, drawBallTrace } from "../analytics/ballTrajectoryOverlay.js";
 
 function Sound(volume) {
   this.audio = new (window.AudioContext || window.webkitAudioContext)();
@@ -54,7 +55,27 @@ function Sound(volume) {
 
 export default function Game({ roomRef, usingCustomAPI }) {
   const API = useMemo(()=>(usingCustomAPI || window.API), [usingCustomAPI]);
-  useHaxballAnalytics(roomRef, { logging: true });
+  // Latest ball trajectory, recomputed once per tick by the analytics hook
+  // below and read by the rAF draw. A ref, not state — it changes every tick,
+  // and it is declared here (above the hook) so the onTick closure does not
+  // reference a binding declared further down the component.
+  const traceRef = useRef(null);
+  // `logging: false` — session capture is done (feat/session-event-capture).
+  // Flip it back to true only for a deliberate recording run; playing should
+  // not write an NDJSON file every game.
+  //
+  // `onTick` is independent of `logging`, so the trajectory overlay works
+  // with capture off.
+  useHaxballAnalytics(roomRef, {
+    logging: false,
+    onTick: (room, frame, geometry) => {
+      // Tick rate, not render rate: the path only changes when the ball's
+      // velocity does. Written to a ref so it never drives a React render.
+      // Horizon defaults are distance-based (see computeBallTrace); a tick
+      // count is the wrong unit once damping is in play.
+      traceRef.current = computeBallTrace(room.state, geometry, room.stadium);
+    },
+  });
   const { player, setPlayerField } = usePlayerData();
   const [roomName, setRoomName] = useState(null);
   const [stadiumName, setStadiumName] = useState(null);
@@ -81,7 +102,7 @@ export default function Game({ roomRef, usingCustomAPI }) {
   // (see OverlayControls.OVERLAY_FEATURES for the registry). Session-only
   // by design, no persistence. `team` is "both" | 1 (red) | 2 (blue),
   // shared across all features.
-  const [overlaySettings, setOverlaySettings] = useState({ enabled: true, team: "both", features: { momentum: true } });
+  const [overlaySettings, setOverlaySettings] = useState({ enabled: true, team: "both", features: { momentum: true, trajectory: true } });
   // onRequestAnimationFrame below is captured once when the renderer is
   // constructed (inside initRenderer), not re-created on every React
   // render — so it would otherwise close over a STALE overlaySettings value.
@@ -451,24 +472,41 @@ export default function Game({ roomRef, usingCustomAPI }) {
             // `enabled` is the master authority: independent of, and checked
             // in addition to, each feature's own toggle — not merged into it.
             if (!overlaySettingsNow.enabled) return;
-            if (!overlaySettingsNow.features.momentum) return; // this feature off: skip its computation, canvas already cleared above
 
             const stadium = extrapolatedRoomState?.gameState?.stadium;
             if (!stadium) return;
 
-            const threshold = estimateModerateSpeedThreshold(stadium.playerPhysics);
-            const directions = getMomentumDirections(extrapolatedRoomState, threshold, overlaySettingsNow.team);
-
-            const ballThreshold = estimateBallSpeedThreshold(stadium.playerPhysics);
-            const ballDirection = getBallMomentumDirection(extrapolatedRoomState, ballThreshold);
-            if (ballDirection) directions.push(ballDirection); // ball has no team, always included when this feature is on
-
-            drawMomentumArrows(ctx, directions, {
+            const transform = {
               cameraOrigin: defaultRendererObj.cameraOrigin,
               cameraScale: defaultRendererObj.cameraScale,
               canvasWidth: cssWidth,
               canvasHeight: cssHeight,
-            });
+              // Extrapolated ball position, so the trajectory path starts
+              // under the ball sprite instead of one tick behind it.
+              ballPos: extrapolatedRoomState?.gameState?.physicsState?.discs?.[0]?.pos,
+            };
+
+            // Each feature is gated on its own — no early return past this
+            // point, or enabling one overlay would silently suppress the
+            // others below it. Canvas is already cleared above, so a feature
+            // that is off simply skips its own computation.
+
+            // Ball path first, so the momentum arrows draw on top of the
+            // corridor rather than under it.
+            if (overlaySettingsNow.features.trajectory && traceRef.current) {
+              drawBallTrace(ctx, traceRef.current, transform);
+            }
+
+            if (overlaySettingsNow.features.momentum) {
+              const threshold = estimateModerateSpeedThreshold(stadium.playerPhysics);
+              const directions = getMomentumDirections(extrapolatedRoomState, threshold, overlaySettingsNow.team);
+
+              const ballThreshold = estimateBallSpeedThreshold(stadium.playerPhysics);
+              const ballDirection = getBallMomentumDirection(extrapolatedRoomState, ballThreshold);
+              if (ballDirection) directions.push(ballDirection); // ball has no team, always included when this feature is on
+
+              drawMomentumArrows(ctx, directions, transform);
+            }
           }
         });
         if (cancelled) {

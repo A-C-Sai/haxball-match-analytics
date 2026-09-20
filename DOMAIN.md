@@ -15,6 +15,8 @@ match and can be re-checked with `scripts/diagnose-physics.mjs` and
 
 - [The play surface](#the-play-surface)
 - [Movement physics](#movement-physics)
+- [Ball physics](#ball-physics)
+- [Kicking](#kicking)
 - [The reachable zone](#the-reachable-zone)
 - [Facing, orbits and aiming](#facing-orbits-and-aiming)
 - [Collision geometry](#collision-geometry)
@@ -99,6 +101,268 @@ Three further facts from the same code:
 
 `gravity` is zero on standard maps but adds a constant-acceleration term where
 non-zero — it is captured, so handle it rather than assume.
+
+---
+
+## Ball physics
+
+Where the **ball** goes. Verified against a headless `node-haxball` sandbox by
+`scripts/validate-trajectory.mjs` — p99 position error 2.4e-13 over 70,994 tick
+comparisons including 663 ticks containing a bounce.
+
+The ball is not self-propelled. Between touches its whole future is fixed by
+position, velocity and the map.
+
+### The ball never curves
+
+Damping is **isotropic** — `v.x` and `v.y` are scaled by the same factor — so
+heading is preserved exactly. Measured drift over 80 free ticks is 2.2e-16 rad
+(one float ULP), and perpendicular deviation from the launch ray is 5.7e-14
+units. There is no spin, no drag asymmetry, no lateral force anywhere in the
+engine.
+
+**Between bounces the path is a straight line.** What damping changes is the
+*spacing* of tick positions along it — each step is exactly `d` times the last:
+
+```
+distance after N ticks = |v| · (1 − dᴺ) / (1 − d)
+total remaining travel = |v| / (1 − d)      = 100·|v| at d = 0.99
+```
+
+So the shape is straight, but progress along it is geometric. A ball at speed
+3 can never travel more than 300 units however much space is ahead of it —
+a hard, cheap reachability gate that costs one division.
+
+Draw the path as straight segments; do **not** put evenly spaced time markers
+along them.
+
+### Wall reflection is not symmetric — verified
+
+Angle of incidence does not equal angle of reflection. On contact the engine
+splits velocity about the surface normal and treats the two parts differently:
+
+| Component | What happens |
+| --- | --- |
+| Normal | scaled by `e = ball.bCoef × surface.bCoef` |
+| Tangential | untouched — there is no wall friction |
+| Both, after | scaled by the global per-tick `damping` |
+
+The product rule is exact, confirmed at ball `bCoef` 0.00 / 0.25 / 0.50 / 0.75
+/ 1.00 / 1.50 against a `bCoef` 1.0 wall. **`e > 1` is legal** — a custom map
+can make the ball leave a wall faster than it arrived.
+
+Consequence: whenever `e < 1` the outgoing angle is *flatter against the wall*
+than the incoming angle. At `e = 0.5`, a 45° approach leaves at **26.565°**.
+Only a head-on hit, or `e = 1`, looks symmetric.
+
+Per-surface `bCoef` varies far more than is visible. On the classic stadium:
+
+| Surface | `bCoef` | `e` vs ball | Behaviour |
+| --- | --- | --- | --- |
+| Top/bottom walls | 1.0 | 0.50 | lively |
+| Goal-side walls | 0.1 | 0.05 | ball effectively dies |
+
+Two walls that look identical return completely different balls. Any wall-pass
+or rebound feature must read `bCoef` per surface rather than assume a map
+constant.
+
+### Collisions are resolved discretely, not in continuous time
+
+The engine integrates `p += v`, finds the overlap, then **snaps** the disc out
+along the surface normal to exactly touching. There is no sub-tick sweep. Two
+consequences:
+
+- The ball forfeits the remainder of that tick's travel.
+- The snap moves it along the *normal*, off its incoming line — so the bounce
+  vertex is **not** the geometric ray/wall intersection, and where it lands
+  depends on tick phase. The same shot arriving half a tick earlier turns at a
+  slightly different point.
+
+So even though the path is straight segments, it cannot be obtained by
+analytic raycasting: both the turn **point** and the turn **angle** come out
+wrong. Simulate tick by tick.
+
+### Curved segments
+
+Segments carry a `curveF`. Finite and non-zero means an arc; `Infinity` means
+straight. The arc's centre and radius are derived from the endpoints:
+
+```
+h  = (v1 − v0) / 2
+c  = v0 + h + perp(h) · curveF        where perp(x,y) = (−y, x)
+r  = |v0 − c|
+```
+
+A disc collides with the arc only while the contact direction lies inside the
+arc's angular span, and the normal is radial. Segment *ends* are not part of
+the segment — the vertices are their own collision objects and must be tested
+separately.
+
+---
+
+## Kicking
+
+All verified in a headless `node-haxball` sandbox. Every claim below was
+measured, and several of them contradict what the mechanics feel like from
+inside the game — including three things this document previously got wrong.
+
+### The kick is one constant impulse — verified
+
+```
+v_ball  +=  kickStrength · normalize(ball.pos − player.pos)
+```
+
+That is the whole of it. Measured properties, all exact:
+
+| Property | Finding |
+| --- | --- |
+| Magnitude | exactly `kickStrength` (5 on the classic map) |
+| Direction | exactly player → ball; tested at 0°, 20°, 45°, 90°, 135°, 180° |
+| Distance falloff | **none** — same impulse anywhere inside range |
+| Dependence on player velocity | **none** |
+| Dependence on ball velocity | **none** — purely additive |
+
+Additivity was checked against pre-velocities along, against and perpendicular
+to the kick: the result is `v₀ + 5·n̂` to the last digit every time.
+
+**There is no such thing as a hard or soft kick in the engine.** What varies
+is the velocity the impulse is added to. See [Cushion and
+power](#cushion-and-power-are-the-same-mechanism).
+
+### Kick range — verified
+
+```
+range = player.radius + ball.radius + 4      (centre-to-centre, exclusive)
+```
+
+29 on the classic map. The `+4` is a true constant: sweeping ball radius over
+5, 10, 15, 20 and 30 moved the boundary to 24, 29, 34, 39 and 49 exactly.
+**Compute it live** — it tracks the radii, so a custom map with a different
+ball size changes it.
+
+Note what this implies: the band where you can kick *without* touching the
+ball is only **4 units wide**, between contact at `r₁ + r₂` and range at
+`r₁ + r₂ + 4`.
+
+### A held kick is armed, not press-timed — verified
+
+One press buys one kick, and it fires on **the first tick the ball is within
+range**. Pressing early and holding is identical to pressing on the exact
+arrival tick — same tick, same impulse:
+
+```
+held from far out :  t=9  gap=27.7  vx −1.827 → 3.141   jump 4.950
+pressed in range  :  t=9  gap=27.7  vx −1.827 → 3.141   jump 4.950
+```
+
+Holding does **not** kick repeatedly; after it fires the ball simply damps.
+
+This matters for prediction. While the ball is outside range the useful
+question is not "what happens if I kick now" — nothing happens now — but
+**"what happens when the ball arrives"**, which is computable by projecting
+the ball forward to the tick it enters range and applying the impulse there.
+
+### Fast balls skip the kick band
+
+The band is 4 units wide, so anything closing faster than ~4 units/tick jumps
+straight from out-of-range to touching:
+
+```
+x = 55 → 43 → 31 (still outside range 29) → collides
+```
+
+Against a genuinely fast ball you never get a clean kick first. The collision
+reverses the ball, and the armed kick then fires on the following tick and
+adds 5 to a ball already heading out. This is the normal hard-clearance path,
+not an edge case.
+
+### Cushion and power are the same mechanism
+
+A ball arriving at 8, with the player retreating / standing / advancing, kicked
+as it enters range:
+
+| Player is | Ball vx **before** kick | Ball vx **after** | Impulse |
+| --- | --- | --- | --- |
+| Retreating | −6.88 | **−1.88** | +5.0000 |
+| Standing | −1.16 | **+3.84** | +5.0000 |
+| Advancing | −0.35 | **+4.65** | +5.0000 |
+
+The impulse never changes. What the player controls is **the ball's velocity
+at the instant of the kick**, by choosing how much collision to allow first.
+Followed through 70 ticks, retreating leaves the ball at x = −51 (still with
+you); advancing sends it to x = +235.
+
+Retreating works on closing speed two ways at once: it avoids the hard
+collision, *and* it extends the chase so damping eats more of the ball's pace
+before it arrives.
+
+**Counter-intuitive detail:** the player's own velocity came out *negative in
+all three conditions*, including "advancing" — an incoming ball at speed 8
+shoves the player backwards harder than they can accelerate into it. So "am I
+moving toward the ball" is **not** the control variable, even though that is
+what it feels like. Ball velocity at kick time is.
+
+### Pass or trap: the threshold
+
+Because the impulse is additive, the ball is sent back out **if and only if**:
+
+```
+closing speed  <  kickStrength
+```
+
+where closing speed is `−(v_ball · n̂)`, `n̂` pointing player → ball.
+
+- **Under the threshold** — the ball is returned. Just under it, it leaves
+  slowly: a controlled short pass.
+- **Over the threshold** — the kick cancels most of the pace but cannot
+  reverse it. The ball creeps the remaining distance, touches the player and
+  **stops dead on them**. Measured at closing 5.88: after the kick −0.88,
+  settling to −0.100.
+
+The second case is a **trap**, not a loss — a 6-speed ball killed at your
+feet. Both outcomes are useful; the threshold decides which one you get, and
+closing speed is not something a player can read off the screen. That makes
+it a strong overlay candidate.
+
+**The ball never travels backwards past the player.** It goes forward or it
+stops. A disc cannot pass through another disc; the only outcomes are
+reversal and death.
+
+### Consequences for prediction
+
+The post-kick velocity is one line, and it automatically captures cushioning
+and power because the collision state is already baked into the ball's current
+velocity — no special-casing for approach direction:
+
+```js
+v_post = ball.velocity + kickStrength * normalize(ball.pos − player.pos)
+```
+
+Feed that to the trajectory predictor and the result is exact.
+
+Two honest caveats. During contact the ball's velocity swings hard from tick
+to tick (−6.88 → −1.16 → −0.35 within a few ticks), so any live preview built
+on this will swing with it — that volatility is real information, since the
+timing genuinely is the skill, but it will look busy. And `kickback` is 0 on
+the classic map, so the player does not recoil; it is a per-map constant and
+should be read, not assumed.
+
+### Facing is the kick direction
+
+There is no orientation field (see [Facing, orbits and
+aiming](#facing-orbits-and-aiming)), but when a player is near the ball the
+kick direction — player → ball — is a well-defined facing, and it is the one
+that matters.
+
+**Do not draw an aim assist along that ray.** The resulting ball direction is
+the vector sum, not the ray. A ball crossing at speed 6, kicked "straight up":
+
+```
+resulting direction 39.81°      the facing ray claims 90°      error 50.19°
+```
+
+A facing-ray aim assist is wrong by fifty degrees in an ordinary situation,
+and looks most confident exactly when it is most wrong.
 
 ---
 
@@ -482,7 +746,44 @@ list **with no join events**, so any map keyed by player id silently goes
 stale. See `README-replay.md` §11 — this froze the renderer, and will break
 any overlay holding per-player state.
 
-### 8. Intent is not computable
+### 8. Collision resolution order changes the answer
+
+**Verified.** Discs — goal posts, and whole barriers on custom maps — must be
+resolved **before** planes, segments and vertices.
+
+Each contact *moves* the disc, so whichever is applied first changes the
+other's penetration depth. Resolving boundaries first reproduces the engine
+exactly on head-on post hits and drifts about a unit on glancing ones — enough
+to send a predicted rebound to the wrong side of the post.
+
+The trap is that this is invisible until static discs are in the test at all.
+A trajectory model validated against walls alone passes at 1e-13 and is still
+wrong; the error only appears once the ball is allowed near a post.
+
+**Rule: any multi-contact resolution must fix its order and validate with
+every geometry kind present**, not with the easy subset.
+
+### 9. An experiment that cannot show the effect will report its absence
+
+**Verified three times, each time convincingly.** A test that is structurally
+incapable of producing the phenomenon returns a clean, confident negative.
+
+| What was measured | Why the answer was empty | What was actually true |
+| --- | --- | --- |
+| Trajectory vs walls only | Goal posts had been parked off-pitch with the players — they share one disc array | Collision **order** was wrong; passed at 1e-13 regardless |
+| Cushioning, with a **stationary** ball | Nothing is arriving, so there is no collision to soften | Cushioning is real and large |
+| Kick additivity, right after the edge-trigger test | That test left the input held at `16`, so there was no rising edge | The kick fires normally; it simply never happened |
+
+In all three the output looked like a result. Nothing errored, no number was
+out of range, and in the first case the headline metric was *better* than
+required.
+
+**Rule: before believing a negative, state what the setup would have looked
+like if the effect were present — and confirm the setup could have produced
+that.** A pass that proves nothing is worse than a failure, because a failure
+gets investigated.
+
+### 10. Intent is not computable
 
 Whether a player is deceiving, telegraphing or faking is not in the data.
 Stutter-stepping is partially visible via `input`, but whether a given stutter
@@ -501,3 +802,28 @@ could fail.
 
 **Build the thing, build the thing that tries to break it, run both against a
 real replay.**
+
+### Play knowledge is a hypothesis generator, not folklore
+
+The kick mechanics above were settled by a run of claims from actually playing
+the game — that kicking only works inside a region, that the resulting kick
+varies in strength, that backing away cushions the ball, that moving into it
+adds power, and that a kicked ball always goes forward.
+
+**Every one of them was correct.** Each also had a mechanism different from
+the obvious reading: there is no variable kick strength, no cushioning term
+and no power term anywhere in the engine — there is one constant impulse added
+to whatever velocity the ball already has, and the player is really
+controlling that velocity.
+
+Two lessons worth keeping:
+
+- **A player's description of *what happens* is reliable evidence. Their
+  explanation of *why* is a hypothesis.** Test the mechanism, keep the
+  observation.
+- **Play knowledge points at scenarios a synthetic test will not think to
+  construct.** Every measurement gap in pitfall 9 was found because someone
+  described a situation the test harness could not produce.
+
+A claim from play that the data appears to contradict is more likely to mean
+the experiment is wrong than the player is.

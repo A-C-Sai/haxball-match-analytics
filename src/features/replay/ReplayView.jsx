@@ -32,6 +32,7 @@ import {
   getBallMomentumDirection,
   drawMomentumArrows,
 } from "../analytics/momentumOverlay.js";
+import { computeBallTrace, drawBallTrace } from "../analytics/ballTrajectoryOverlay.js";
 
 /**
  * ReplayView.jsx
@@ -105,6 +106,9 @@ export default function ReplayView() {
   const roomRef = useRef(null);
   const canvasRef = useRef(null);
   const momentumCanvasRef = useRef(null);
+  // Latest ball trajectory, recomputed once per tick by the analytics hook
+  // and read by the rAF draw below. A ref, not state — it changes every tick.
+  const traceRef = useRef(null);
   const chatBoxRef = useRef(null);
   const chatInputRef = useRef(null);
   const rendererRef = useRef(null);
@@ -146,7 +150,7 @@ export default function ReplayView() {
   const [overlaySettings, setOverlaySettings] = useState({
     enabled: true,
     team: "both",
-    features: { momentum: true },
+    features: { momentum: true, trajectory: true },
   });
   const overlaySettingsRef = useRef(overlaySettings);
   useEffect(() => {
@@ -156,7 +160,25 @@ export default function ReplayView() {
   // Runs against the adapter exactly as it runs against a live room. The
   // adapter re-emits the reader's `onGameTick` as `onAfterGameTick`, which is
   // what this hook binds (replay readers never fire the `onAfter*` variants).
-  useHaxballAnalytics(roomRef, { enabled: ready, logging: true });
+  // `logging: false` — session capture is done (feat/session-event-capture).
+  // Flip it back to true only for a deliberate recording run; watching a
+  // replay should not write an NDJSON file every time.
+  //
+  // `onTick` is independent of `logging`, so the trajectory overlay works
+  // with capture off. Keep `enabled: ready` — on the replay path the adapter
+  // is built asynchronously and `ready` is what re-triggers the effect once
+  // `roomRef.current` is populated.
+  useHaxballAnalytics(roomRef, {
+    enabled: ready,
+    logging: false,
+    onTick: (room, frame, geometry) => {
+      // Tick rate, not render rate: the path only changes when the ball's
+      // velocity does. Written to a ref so it never drives a React render.
+      // Horizon defaults are distance-based (see computeBallTrace); a tick
+      // count is the wrong unit once damping is in play.
+      traceRef.current = computeBallTrace(room.state, geometry, room.stadium);
+    },
+  });
 
   const leave = useCallback(() => navigate("/RoomList"), [navigate]);
 
@@ -384,24 +406,40 @@ export default function ReplayView() {
 
             const settingsNow = overlaySettingsRef.current;
             if (!settingsNow.enabled) return;
-            if (!settingsNow.features.momentum) return;
 
             const stadium = extrapolatedRoomState?.gameState?.stadium;
             if (!stadium) return;
 
-            const threshold = estimateModerateSpeedThreshold(stadium.playerPhysics);
-            const directions = getMomentumDirections(extrapolatedRoomState, threshold, settingsNow.team);
-
-            const ballThreshold = estimateBallSpeedThreshold(stadium.playerPhysics);
-            const ballDirection = getBallMomentumDirection(extrapolatedRoomState, ballThreshold);
-            if (ballDirection) directions.push(ballDirection);
-
-            drawMomentumArrows(ctx, directions, {
+            const transform = {
               cameraOrigin: rendererObj.cameraOrigin,
               cameraScale: rendererObj.cameraScale,
               canvasWidth: cssWidth,
               canvasHeight: cssHeight,
-            });
+              // Extrapolated ball position, so the trajectory path starts
+              // under the ball sprite instead of one tick behind it.
+              ballPos: extrapolatedRoomState?.gameState?.physicsState?.discs?.[0]?.pos,
+            };
+
+            // Each feature is gated on its own — no early return past this
+            // point, or enabling one overlay would silently suppress the
+            // others below it.
+
+            // Ball path first, so the momentum arrows draw on top of the
+            // corridor rather than under it.
+            if (settingsNow.features.trajectory && traceRef.current) {
+              drawBallTrace(ctx, traceRef.current, transform);
+            }
+
+            if (settingsNow.features.momentum) {
+              const threshold = estimateModerateSpeedThreshold(stadium.playerPhysics);
+              const directions = getMomentumDirections(extrapolatedRoomState, threshold, settingsNow.team);
+
+              const ballThreshold = estimateBallSpeedThreshold(stadium.playerPhysics);
+              const ballDirection = getBallMomentumDirection(extrapolatedRoomState, ballThreshold);
+              if (ballDirection) directions.push(ballDirection);
+
+              drawMomentumArrows(ctx, directions, transform);
+            }
           },
         });
 
