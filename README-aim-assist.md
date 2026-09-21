@@ -31,12 +31,12 @@ line you see before taking the shot. Only the second one changes a decision.
 | Scope decided | ~~Done — cue line only~~ |
 | The reachable wedge | ~~Measured, 6 ball speeds — [DOMAIN.md](DOMAIN.md#the-reachable-wedge-measured)~~ |
 | `aimAssistOverlay.js` | ~~Done~~ |
-| `scripts/validate-aim-assist.mjs` | ~~Done — 4 checks, ALL PASS~~ |
+| `scripts/validate-aim-assist.mjs` | ~~Done — 5 checks, ALL PASS~~ |
 | Wired into both views | ~~Done — registry, defaults, per-feature gating~~ |
 | Seen running | ~~Done — kickoff, carrying, crossing ball, wall aim~~ |
 
 ```
-physics PASS   range PASS   wedge PASS   reachable PASS
+physics PASS   range PASS   wedge PASS   reachable PASS   blockers PASS
 ```
 
 Deliberately **not** built: the sensitivity band, the naive-ray training
@@ -95,6 +95,7 @@ should be able to switch it off and aim better than before.
 | Swept corridor | in kick range only | the region the ball body would occupy — answers "does it fit" |
 | Bounce dots | wherever the path turns | |
 | Resting circle | when the ball would stop inside the horizon | where it actually ends up |
+| Bar across the path | when a player's body ends it | the prediction stops here — *not* "the ball ends up here" |
 | Ball halo, white, fading up | approaching | how close you are to being able to kick |
 | Ball halo, green, steady | a kick is available | |
 | Range + contact rings | off by default (`showRangeCircle`) | the band you can kick from without touching the ball |
@@ -174,7 +175,10 @@ What varies is two other things:
    the player every tick, so the exact answer changes with it. The line swings
    — that is the truth moving, not error, and smoothing it would be lying.
 2. **Someone else may touch the ball.** Exact geometry, contingent on no
-   interference. The argument for a short horizon, not a long one.
+   interference. The argument for a short horizon, not a long one. Bodies
+   standing in the path are now handled — the line is cut where it would reach
+   them (see below) — but a player who *moves* into it during the flight is
+   not, and cannot be without knowing where they are going.
 
 **A dead ball has no jostle**, so kickoffs and restarts are exact *and* stable.
 Confirmed in play: "kickoff is rock solid".
@@ -208,6 +212,36 @@ for a moving one. The drawing says so rather than leaving it implicit: the cue
 physics. Lower it if the cue feels eager; `0` restores in-range-only. The
 `on approach` toggle sets it at draw time rather than compute time — see
 below.
+
+---
+
+## Players end the line
+
+Shipped without this and found in play: the cue drew straight through bodies
+the engine really does deflect the ball off. The masks match in both
+directions, so it was never a collision-filter question — the model only ever
+walked the stadium, and players are not in it.
+
+**Truncate, not bounce.** `predictBallPath` takes a per-tick `blockers` list
+and ends the trace at first contact. A predicted *rebound* would be the
+facing-ray mistake again: a player has `invMass 0.5` against the ball's `1`,
+so both bodies move, and they will not be where they are now by the time the
+ball arrives. "The path is valid this far" needs no such assumption, and it
+degrades in the right direction — the nearer the blocker, the less time it has
+to move.
+
+**The current contact is suppressed as a latch, released on DIRECTION.** That
+took three attempts, each correct for the case in front of it:
+
+| Attempt | Broke on |
+| --- | --- |
+| Exclude the kicker permanently | A ball played into a corner comes back to the player who kicked it |
+| Release once the ball separates | Ball pressed against a wall: it never separates, so the latch never re-arms |
+| Release when the ball turns back toward the blocker | — |
+
+Distance cannot distinguish "resting on me" from "about to hit me"; pressed
+into a wall, both are true at once and permanently. Direction can. All three
+cases are in the validator, so a fourth attempt has to survive them.
 
 ---
 
@@ -253,6 +287,7 @@ not by which feature they arrived with.**
 | 2. Range | the boundary is where `kickRange()` says, and exclusive | fires at 28.99, not at 29.00 |
 | 3. Wedge | achievable directions match the three regimes | exact at all six speeds |
 | 4. Reachable | every drawn element can actually fire | stop marker, bounces, both wedge branches, both `inRange` branches |
+| 5. Blockers | a body truncates the path, and in time | truncates at tick 21, engine diverges at tick 21 |
 
 **Check 4 is the one `feat/ball-trajectory` did not have.** There the physics
 validator passed at 1e-13 while the overlay shipped a stop marker whose draw
@@ -269,6 +304,15 @@ Check 3 failed on first run at 60.35° against a predicted 38.68°, and the
 cause was the harness measuring kicks contaminated by body collisions — see
 [DOMAIN.md § The reachable
 wedge](DOMAIN.md#the-reachable-wedge-measured).
+
+**Check 5 is late, and why is worth knowing.** Check 1 parks every player at
+(6000, 6000) every tick, deliberately — it validates ball-vs-geometry. That
+means it constructs a world in which ball-vs-player cannot happen, so its p99
+was never evidence about players. A validator's exclusions are load-bearing
+claims about what it does *not* prove ([pitfall
+9](DOMAIN.md#9-an-experiment-that-cannot-show-the-effect-will-report-its-absence)).
+Check 5 then sprang the same trap twice more while being written — two test
+walls that could not return the ball far enough to show the effect.
 
 ---
 
@@ -326,6 +370,9 @@ tick closure never references a binding declared further down.
   seam suppresses them; anything stateful added here inherits the problem if
   it bypasses the seam ([pitfall
   7](DOMAIN.md#7-anything-cached-per-player-breaks-on-a-replay-seek)).
+- **Players block but do not deflect.** The line is cut where a body would
+  stop it; the rebound is deliberately not modelled, and a player who moves
+  into the path mid-flight is not handled at all.
 - **Per-disc physics is not captured.** `kickStrength` is read from
   `playerPhysics`; a map or host that overrides it per disc is not handled,
   and `computeAimAssist` returns null rather than guessing when it is absent.

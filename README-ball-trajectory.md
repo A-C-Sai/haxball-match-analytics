@@ -389,9 +389,18 @@ These are judgement calls that need eyes on a real match, not more maths:
 - **Exact only while no player touches the ball.** The moment one does, the
   real path diverges. The tail of a long trace is a decaying claim, not a
   prediction — a long horizon would look authoritative while being decoration.
-- **Players are not obstacles in the model.** They move, so including them
-  would be false precision. The corridor answers "does the ball fit through
-  the gap as it is now", not "will it still be there".
+- **~~Players are not obstacles in the model.~~ Corrected later — they are.**
+  This entry read as a decision and was an oversight, which is why it survived
+  into a second branch. The reasoning was half right: modelling players as
+  static *bouncers* would be false precision, since they have mass and move.
+  But it was over-applied into ignoring them entirely, and the overlay drew
+  straight through bodies the engine does deflect the ball off. `predictBallPath`
+  now takes per-tick `blockers` and **truncates** the path at first contact —
+  "the path is valid this far" needs no assumption about where anyone is going.
+  See [DOMAIN.md § Players collide with the
+  ball](DOMAIN.md#players-collide-with-the-ball-and-are-not-stadium-geometry).
+- **The corridor still answers "does the ball fit through the gap as it is
+  now"**, not "will it still be there".
 - **Per-disc physics overrides are not read.** The ball's own `bCoef`,
   `damping` and `radius` are read live, but a host changing them mid-game via
   `setDiscProperties` is not watched for.
@@ -420,6 +429,13 @@ It also settled a framing question the hard way. This overlay is
 what the eye supplies. The predictive version, showing what a kick *would* do,
 is the one worth having, and it is now cheap because the physics underneath it
 is measured.
+
+**A bug shipped here and was only found much later:** the trace ignored
+players entirely. The cause was three-deep — `buildCollisionSet` skips movable
+discs, players are not in the stadium geometry at all, and the set is cached
+per stadium so a per-tick entity could never live in it — and the validator
+could not have caught it, because it parks every player on purpose. Fixed by
+truncating rather than bouncing; see Known limitations above.
 
 **Two things came back to this branch later.** The unreachable stop marker
 found here became a standing validator check — every overlay since tests that

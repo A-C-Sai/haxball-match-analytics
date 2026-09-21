@@ -32,7 +32,7 @@ import {
   getBallMomentumDirection,
   drawMomentumArrows,
 } from "../analytics/momentumOverlay.js";
-import { computeBallTrace, drawBallTrace } from "../analytics/ballTrajectoryOverlay.js";
+import { computeBallTrace, drawBallTrace, blockersFromFrame } from "../analytics/ballTrajectoryOverlay.js";
 import { computeAimAssist, drawAimAssist } from "../analytics/aimAssistOverlay.js";
 
 /**
@@ -184,7 +184,11 @@ export default function ReplayView() {
       // velocity does. Written to a ref so it never drives a React render.
       // Horizon defaults are distance-based (see computeBallTrace); a tick
       // count is the wrong unit once damping is in play.
-      traceRef.current = computeBallTrace(room.state, geometry, room.stadium);
+      // Players are per-tick, so the blocker list is rebuilt every tick and
+      // handed in — it cannot live in the geometry-keyed collision cache.
+      traceRef.current = computeBallTrace(room.state, geometry, room.stadium, {
+        blockers: blockersFromFrame(frame),
+      });
 
       // The cue line. A replay has no local player (`currentPlayerId` is -1),
       // so computeAimAssist falls back to whoever currently has the ball

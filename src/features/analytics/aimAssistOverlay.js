@@ -197,7 +197,7 @@
  */
 
 import { predictBallPath } from "./ballTrajectory.js";
-import { getCollisionSet } from "./ballTrajectoryOverlay.js";
+import { getCollisionSet, blockersFromFrame } from "./ballTrajectoryOverlay.js";
 import { estimateTerminalSpeed } from "./momentumOverlay.js";
 
 /**
@@ -325,7 +325,8 @@ export function findKicker(players, ball, currentPlayerId, team = "both", leadIn
  *            proximity:number, nHat:Vec2, vPost:Vec2,
  *            playerPos:Vec2, ballPos:Vec2, radius:number,
  *            points:Vec2[], bounces:Array, firstBounceIndex:number,
- *            stops:boolean, travelled:number,
+ *            stops:boolean, blocked:{index:number,pos:Vec2,id:*}|null,
+ *            travelled:number,
  *            naiveDir:Vec2, wedgeHalfAngle:number|null,
  *            ballSpeed:number, kickStrength:number} | null}
  *   `inRange` is false while the player is still approaching — the geometry is
@@ -406,7 +407,15 @@ export function computeAimAssist(
     },
     set,
     maxTicks,
-    { maxDistance },
+    {
+      maxDistance,
+      // EVERY player blocks, the kicker included. They are suppressed only
+      // while the ball is still touching them (predictBallPath latches that),
+      // and become an obstacle again once it is clear — which is what makes a
+      // ball kicked into a corner truncate on the player it comes back to,
+      // instead of drawing through them.
+      blockers: blockersFromFrame(frame),
+    },
   );
 
   const ballSpeed = Math.hypot(ball.vel.x, ball.vel.y);
@@ -432,6 +441,10 @@ export function computeAimAssist(
     bounces: trace.bounces,
     firstBounceIndex: trace.bounces.length ? trace.bounces[0].index : -1,
     stops: trace.stopped,
+    // Non-null when another player's body ends the line. Beyond it the cue
+    // says nothing, which is the point: a pass into a defender is exactly the
+    // case where drawing straight through would be most misleading.
+    blocked: trace.blocked,
     travelled: trace.travelled,
     // The wrong answer, kept so a training mode can show the gap between
     // intuition and physics. Never drawn as the prediction.
@@ -497,6 +510,7 @@ export function drawAimAssist(ctx, aim, transform, style = {}) {
     naiveColor = "rgba(255, 92, 92, 0.45)",
     bounceColor = "#3ad9ff",
     stopColor = "#7dfcc4",
+    blockedColor = "#ff6b6b",
     lineWidth = 2,
     dash = [7, 5],
     bounceRadiusPx = 3.5,
@@ -665,7 +679,22 @@ export function drawAimAssist(ctx, aim, transform, style = {}) {
   // Where the ball would actually come to rest. Only meaningful when it
   // genuinely stops inside the horizon — otherwise this is just where the
   // drawn line ran out, which is a different claim.
-  if (aim.stops && points.length > 1) {
+  // Truncated by a body. A bar across the path, not a circle: the claim is
+  // "the prediction ends here", not "the ball ends up here".
+  if (aim.blocked && points.length > 1) {
+    const end = points[points.length - 1];
+    const prev = points[points.length - 2];
+    const ang = Math.atan2(end.y - prev.y, end.x - prev.x) + Math.PI / 2;
+    const half = Math.max(5, aim.radius * cameraScale);
+    ctx.strokeStyle = blockedColor;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(toX(end.x) + Math.cos(ang) * half, toY(end.y) + Math.sin(ang) * half);
+    ctx.lineTo(toX(end.x) - Math.cos(ang) * half, toY(end.y) - Math.sin(ang) * half);
+    ctx.stroke();
+  }
+
+  if (aim.stops && !aim.blocked && points.length > 1) {
     const end = points[points.length - 1];
     ctx.strokeStyle = stopColor;
     ctx.lineWidth = 2;

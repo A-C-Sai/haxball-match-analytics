@@ -89,6 +89,33 @@ export function getCollisionSet(geometry, geometryVersion, ballSpec) {
   return cache.set;
 }
 
+/**
+ * Player discs as blockers for predictBallPath, from an extractFrame() frame.
+ *
+ * Players are NOT part of the cached collision set and cannot be: that set is
+ * built from the stadium once per geometryVersion, while players move every
+ * tick. This is the per-tick half, rebuilt by the caller each tick and handed
+ * in — which is also why it lives here rather than inside buildCollisionSet.
+ *
+ * EVERY in-game player is included, with no way to exclude one. That is
+ * deliberate: an earlier version let callers drop the kicker, and the aim cue
+ * then drew straight through the kicker's own body whenever a ball played into
+ * a corner came back to them. Suppressing the current contact is
+ * predictBallPath's job and it does it as a latch that releases on separation,
+ * which is correct for every player including whoever just kicked.
+ *
+ * @param {Object} frame output of extractFrame()
+ * @returns {{x:number,y:number,r:number,id:number}[]}
+ */
+export function blockersFromFrame(frame) {
+  const out = [];
+  for (const pl of frame?.players ?? []) {
+    if (!pl.inGame || !pl.pos || pl.radius == null) continue;
+    out.push({ x: pl.pos.x, y: pl.pos.y, r: pl.radius, id: pl.id });
+  }
+  return out;
+}
+
 /** Drop the cached set. Call on stadium change if you do not pass a version. */
 export function resetCollisionSetCache() {
   cache = { geometryVersion: null, set: null };
@@ -117,6 +144,9 @@ export function resetCollisionSetCache() {
  *   still leaves 150 units of roll: the overlay vanished with a sixth of the
  *   pitch still to cross, and took the resting place with it.
  * @param {number} [options.maxTicks=600] safety bound on the simulation loop.
+ * @param {Array} [options.blockers=[]] player discs that END the trace on
+ *   contact (see predictBallPath). Build with blockersFromFrame() in the tick
+ *   handler — they are per-tick and cannot be cached with the geometry.
  * @param {boolean} [options.onlyWhenInteresting=false] when true, suppress traces
  *   with no bounce and no stop point. Off by default: the clearance question
  *   (see header) applies even to a plain straight run, so there is usually
@@ -133,6 +163,7 @@ export function computeBallTrace(roomState, geometry, geometryVersion, options =
     maxDistance = 520,
     minRemainingTravel = 15,
     maxTicks = 600,
+    blockers = [],
     onlyWhenInteresting = false,
   } = options;
 
@@ -164,7 +195,7 @@ export function computeBallTrace(roomState, geometry, geometryVersion, options =
     },
     set,
     maxTicks,
-    { maxDistance },
+    { maxDistance, blockers },
   );
 
   const firstBounceIndex = trace.bounces.length ? trace.bounces[0].index : -1;
@@ -209,6 +240,7 @@ export function drawBallTrace(ctx, trace, transform, style = {}) {
     bounceColor = "#ff8c3a",
     bounceRadiusPx = 4,
     stopColor = "#ff5470",
+    blockedColor = "#ff5470",
   } = style;
 
   const toScreenX = (x) => (x - cameraOrigin.x) * cameraScale + canvasWidth / 2;
@@ -280,7 +312,23 @@ export function drawBallTrace(ctx, trace, transform, style = {}) {
   // radius, so it reads as "the ball ends up here" rather than as a generic
   // marker. Only meaningful if it stops inside the horizon — otherwise this
   // is just the end of the drawn line.
-  if (trace.stops) {
+  // A truncation is not a resting place. Drawn as a bar across the path —
+  // "the prediction ends here" — rather than as a ball-sized circle, which
+  // would read as "the ball ends up here" and be a different, false claim.
+  if (trace.blocked) {
+    const end = points[points.length - 1];
+    const prev = points[Math.max(0, points.length - 2)];
+    const ang = Math.atan2(end.y - prev.y, end.x - prev.x) + Math.PI / 2;
+    const half = Math.max(5, radius * cameraScale);
+    ctx.strokeStyle = blockedColor;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(toScreenX(end.x) + Math.cos(ang) * half, toScreenY(end.y) + Math.sin(ang) * half);
+    ctx.lineTo(toScreenX(end.x) - Math.cos(ang) * half, toScreenY(end.y) - Math.sin(ang) * half);
+    ctx.stroke();
+  }
+
+  if (trace.stops && !trace.blocked) {
     const end = points[points.length - 1];
     ctx.strokeStyle = stopColor;
     ctx.lineWidth = 2;

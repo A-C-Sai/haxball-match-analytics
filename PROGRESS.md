@@ -5,14 +5,15 @@ either permanent (how the game works, how a branch was built) or a catalogue
 (what could be built). This file is the only one that goes stale on purpose,
 and the only one that needs updating when a branch lands.
 
-Last updated: end of `feat/aim-assist`.
+Last updated: after `fix/players-block-predictions`.
 
 ---
 
 ## Where things stand
 
-Four branches done. A working data layer, replay playback as a test bench, a
-tick-exact ball predictor, and three overlay features.
+Four branches done plus one cross-cutting fix. A working data layer, replay
+playback as a test bench, a tick-exact ball predictor, and three overlay
+features.
 
 | Branch | State | What it left behind |
 | --- | --- | --- |
@@ -20,6 +21,12 @@ tick-exact ball predictor, and three overlay features.
 | [`feat/session-event-capture`](README-session-event-capture.md) | **Complete** | events + game state captured; the reachable-zone formula validated at 100%, bound tight |
 | [`feat/ball-trajectory`](README-ball-trajectory.md) | **Complete** | tick-exact ball predictor (p99 2.4e-13), live overlay at true ball width, most of the raycast primitive |
 | [`feat/aim-assist`](README-aim-assist.md) | **Complete** | the cue line (p99 2.93e-13), a validator that tests display logic too, the reachable wedge |
+| `fix/players-block-predictions` | **Complete** | both overlays stop drawing through bodies; `predictBallPath` takes per-tick blockers |
+
+That last one is a fix off `main`, not a feature branch: it touches
+`ballTrajectory.js` and `aimAssistOverlay.js`, so it belongs to neither of the
+branches that own them. **Branch from `main`, not from a merged feature
+branch**, or the bug comes back.
 
 **What exists:** per-tick extraction, per-map geometry, engine events, NDJSON
 session logging, replay playback, a validated ball predictor, and three
@@ -28,7 +35,9 @@ overlays — momentum arrows, the ball path, the aim cue.
 **What does not:** any analytics function about *players*. No LOS, no passing
 lanes, no dominance, no commitment. Everything shipped is about the ball,
 which is the easy half — the ball has no intentions and cannot accelerate
-itself.
+itself. Players now appear in the predictions only as *blockers*: the path is
+cut where a body would stop it, which needs no claim about where anyone is
+going. Anything more needs `feat/reachable-zone`.
 
 ---
 
@@ -138,10 +147,27 @@ condition could never be true. Every validator since checks that each drawn
 element can actually fire in the states the overlay will really be in — and
 that check has now caught a second dead branch.
 
+**A validator's exclusions are load-bearing claims about what it does NOT
+prove.** `validate-trajectory.mjs` parks every player on purpose and says so
+in a comment, because it is validating ball-vs-geometry. That caveat never
+travelled to what the overlay claimed on screen, so "p99 2.4e-13" circulated
+as though it covered everything — through two branches, while both drew
+straight through player bodies. Write the exclusion next to the number.
+
 **A false negative is as available as a false positive.** Pitfall 9 in
-DOMAIN.md, hit three times in one direction and once in the other. State what
-the setup would look like if the effect were present, then confirm the setup
-could produce it.
+DOMAIN.md, now six instances. Three hid a wrong number; one hid an entire
+class of situation; **two were sprung inside a test written to catch that very
+thing.** Constructing a case that cannot show the effect is not a mistake you
+stop making — it is the default outcome of building a setup around what you
+expect to see. State what the setup would look like if the effect were
+present, then confirm the setup could produce it.
+
+**A fix that passes is not a fix that is right.** The blocker work took three
+attempts — exclude the kicker, release on separation, release on direction —
+each correct for the case in front of it and wrong for the next, and each
+found by someone playing rather than by a test. Every case that broke a
+version is now in the validator, which is the only thing that makes attempt
+four cheaper than attempt three.
 
 **Derivations have missing cases that measurement finds.** The reachable wedge
 was derived with two regimes and has three; the boundary case only appeared
@@ -177,7 +203,13 @@ differed from the obvious reading. Test the mechanism; keep the observation.
    node scripts/validate-aim-assist.mjs
    ```
    All are deterministic, so their numbers are baselines and any divergence is
-   signal.
+   signal. Current: trajectory p99 `2.43e-13`; aim assist p99 `2.93e-13`, wedge
+   `180/180/89.50/56.44/38.68/24.62`, blockers truncating at tick 21 where the
+   engine diverges at tick 21.
+
+   **Read what each validator excludes before quoting its number.** Check 1 of
+   the aim-assist validator parks every player, so it proves nothing about
+   ball-vs-player; that is check 5's job.
 
 **When a branch lands, update this file and nothing else.** The branch README
 records what was built; the roadmap in README.md describes what each item is.

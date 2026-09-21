@@ -347,6 +347,55 @@ timing genuinely is the skill, but it will look busy. And `kickback` is 0 on
 the classic map, so the player does not recoil; it is a per-map constant and
 should be read, not assumed.
 
+### The reachable wedge, measured
+
+The impulse is a **fixed magnitude added to the current velocity**, so the set
+of achievable post-kick velocities is a circle of radius `kickStrength`
+centred on `ball.velocity`, in velocity space. Where the origin sits relative
+to that circle decides which directions you can send the ball at all:
+
+| Ball speed | Origin vs circle | Reachable directions |
+| --- | --- | --- |
+| `< kickStrength` | strictly inside | **all** |
+| `= kickStrength` | on the boundary | deviation is exactly half the orientation angle, so the supremum is **90°** and is never attained |
+| `> kickStrength` | outside | a wedge of half-angle **`asin(kickStrength / |v_ball|)`** |
+
+Measured by sweeping a player all the way around the ball at each speed and
+recording the actual resulting heading (`scripts/validate-aim-assist.mjs`,
+check 3):
+
+```
+ball speed    0     3      5      6      8     12
+measured    180   180  89.50  56.44  38.68  24.62
+predicted   180   180  90.00  56.44  38.68  24.62
+```
+
+**No amount of orbiting escapes the wedge.** This is the general form of the
+rule that [the ball never travels backwards past the
+player](#pass-or-trap-the-threshold) — that is the degenerate case at
+deviation 180°. It is also a *different* constraint from the [capability
+cone](#the-capability-cone), which is about how long rotating takes: the cone
+says "not yet", the wedge says "not ever, from this ball state".
+
+**The `= kickStrength` row was missed on the first derivation** and only
+appeared when the sweep was run. The two-case version ("inside → all
+directions, outside → a wedge") reads as complete and is wrong on the
+boundary.
+
+**A measurement caution, and an instance of [pitfall
+9](#9-an-experiment-that-cannot-show-the-effect-will-report-its-absence) in
+reverse.** The first sweep reported 60.35° against a predicted 38.68° at ball
+speed 8, which looked like the model failing. It was the harness: above ball
+speed ~4 the ball crosses the 4-unit band and reaches the player's *body*
+within the same tick for orientations in front of it, so those samples are a
+kick **plus a disc-vs-disc collision** and deviate further than any kick can.
+They are not evidence against the wedge; they are not kicks. Excluding them —
+a sample is clean exactly when the post-tick velocity equals
+`(v_ball + kickStrength·n̂) · damping` — leaves 297 of 360 clean at speed 8 and
+the agreement is exact. **A false negative is as available as a false
+positive, and the same rule catches both: state what the setup would look like
+if the effect were present, then confirm the setup could produce it.**
+
 ### Facing is the kick direction
 
 There is no orientation field (see [Facing, orbits and
@@ -363,6 +412,11 @@ resulting direction 39.81°      the facing ray claims 90°      error 50.19°
 
 A facing-ray aim assist is wrong by fifty degrees in an ordinary situation,
 and looks most confident exactly when it is most wrong.
+
+Note this measurement is the wedge seen from the inside: at ball speed 6 the
+wedge half-angle is 56.44°, and a 90° facing ray asking for a result at 90°
+is asking for something outside it. The ball leaves at 39.81° because that is
+where the vector sum lands, not because the aim was imprecise.
 
 ---
 
@@ -557,6 +611,29 @@ stutter-stepping is the technique for aiming.
 Missing any of these makes real geometry invisible to the model.
 `joints` also exist and tie discs together — a jointed disc can move, so
 treating stadium discs as static is only safe when that list is empty.
+
+### Players collide with the ball, and are not stadium geometry
+
+Both are true at once, and missing either one shipped a bug.
+
+The masks match in both directions — ball `cGroup 193 / cMask 63` against
+player `cGroup 2 / cMask 47` — so **the engine really does bounce the ball off
+players.** Any model that only walks the stadium will draw straight through
+them.
+
+But a player is not something a collision set can hold:
+
+- `invMass` is **0.5** against the ball's **1**, so disc-vs-disc is a
+  mass-weighted response in which *both* bodies move. Not a wall.
+- They are in `physicsState.discs`, not in `stadium.discs`. The stadium has
+  the ball template and the goal posts, nothing else.
+- They move every tick, so they cannot live in a set cached per stadium.
+
+For prediction the honest treatment is therefore to **truncate, not bounce**:
+say where the path stops being valid rather than inventing a rebound off a
+frozen position the player has already left. Where they *will* be needs intent
+([pitfall 10](#10-intent-is-not-computable)); where they *could* be is the
+reachable zone.
 
 ### Everything has width
 
@@ -765,7 +842,7 @@ every geometry kind present**, not with the easy subset.
 
 ### 9. An experiment that cannot show the effect will report its absence
 
-**Verified three times, each time convincingly.** A test that is structurally
+**Verified six times, each time convincingly.** A test that is structurally
 incapable of producing the phenomenon returns a clean, confident negative.
 
 | What was measured | Why the answer was empty | What was actually true |
@@ -773,8 +850,11 @@ incapable of producing the phenomenon returns a clean, confident negative.
 | Trajectory vs walls only | Goal posts had been parked off-pitch with the players — they share one disc array | Collision **order** was wrong; passed at 1e-13 regardless |
 | Cushioning, with a **stationary** ball | Nothing is arriving, so there is no collision to soften | Cushioning is real and large |
 | Kick additivity, right after the edge-trigger test | That test left the input held at `16`, so there was no rising edge | The kick fires normally; it simply never happened |
+| Trajectory and aim assist, **with every player parked at (6000, 6000)** | Ball-vs-player cannot occur in that world | Both overlays drew straight through bodies the engine deflects the ball off |
+| Whether a rebound truncates on the kicker, off the **classic side wall** | Measured `e ≈ 0.03`: a 7-speed ball dies 22 units off it and never returns | The latch was right; the wall could not send the ball back |
+| The same, off a synthetic **bCoef-1.0 wall 500 units away** | `e = 0.5` even against a perfect wall, and the outbound run damps it — returned to x=237, needed x=25 | Same; near wall, fast arrival, long return shows it in one tick |
 
-In all three the output looked like a result. Nothing errored, no number was
+In all six the output looked like a result. Nothing errored, no number was
 out of range, and in the first case the headline metric was *better* than
 required.
 
@@ -782,6 +862,20 @@ required.
 like if the effect were present — and confirm the setup could have produced
 that.** A pass that proves nothing is worse than a failure, because a failure
 gets investigated.
+
+**The corollary, learned the expensive way: a validator's exclusions are
+load-bearing claims about what it does NOT prove, and they belong written down
+next to its number.** `validate-trajectory.mjs` parks every player on purpose,
+and says so in a comment — it is validating ball-vs-geometry. But that caveat
+never travelled to what the overlay claimed on screen, so "p99 2.4e-13"
+circulated as though it covered everything, through two branches. The first
+three entries above each hid one wrong number; that one hid an entire class of
+situation.
+
+The last two entries are the same trap sprung *inside a test written to catch
+it*. Constructing a case that cannot show the effect is not a beginner's
+mistake you stop making — it is the default outcome of building a setup around
+what you expect to see.
 
 ### 10. Intent is not computable
 

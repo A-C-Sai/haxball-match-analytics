@@ -29,7 +29,7 @@ import { useCallback } from "react";
 import SoundButton from "./components/SoundButton.jsx";
 import useHaxballAnalytics from "../analytics/useHaxballAnalytics.js";
 import { estimateModerateSpeedThreshold, estimateBallSpeedThreshold, getMomentumDirections, getBallMomentumDirection, drawMomentumArrows } from "../analytics/momentumOverlay.js";
-import { computeBallTrace, drawBallTrace } from "../analytics/ballTrajectoryOverlay.js";
+import { computeBallTrace, drawBallTrace, blockersFromFrame } from "../analytics/ballTrajectoryOverlay.js";
 import { computeAimAssist, drawAimAssist } from "../analytics/aimAssistOverlay.js";
 
 function Sound(volume) {
@@ -98,7 +98,11 @@ export default function Game({ roomRef, usingCustomAPI }) {
       // velocity does. Written to a ref so it never drives a React render.
       // Horizon defaults are distance-based (see computeBallTrace); a tick
       // count is the wrong unit once damping is in play.
-      traceRef.current = computeBallTrace(room.state, geometry, room.stadium);
+      // Players are per-tick, so the blocker list is rebuilt every tick and
+      // handed in — it cannot live in the geometry-keyed collision cache.
+      traceRef.current = computeBallTrace(room.state, geometry, room.stadium, {
+        blockers: blockersFromFrame(frame),
+      });
 
       // The cue line: where the ball would go if the kicker kicked THIS tick.
       // Reads `frame` rather than room.state — extractFrame has already

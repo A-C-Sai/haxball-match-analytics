@@ -85,8 +85,34 @@
  *
  * NOT MODELLED (deliberate):
  * - Goals. The trace runs through the goal line; stop it yourself at the goal.
- * - Players. See predictBallPath's `discs` option for the caveat.
  * - Kickoff/post-goal teleports.
+ *
+ * PLAYERS ARE BLOCKERS, NOT BOUNCERS. buildCollisionSet only takes STATIC
+ * discs (invMass === 0), which is correct — it is fed the stadium, and a
+ * player is neither static nor in it. Players live in physicsState.discs and
+ * move every tick, so they cannot live in a set cached per geometryVersion.
+ *
+ * That left both overlays drawing straight through bodies the engine really
+ * does bounce the ball off (the masks match: ball cGroup 193/cMask 63 against
+ * player cGroup 2/cMask 47 passes both ways).
+ *
+ * So predictBallPath takes a per-tick `blockers` list and TRUNCATES at first
+ * contact rather than simulating a rebound. That is the honest treatment:
+ *
+ *   - A player has invMass 0.5 against the ball's 1, so disc-vs-disc is a
+ *     mass-weighted response in which BOTH bodies move. Not a wall.
+ *   - They move during the ball's flight, so a rebound computed off a frozen
+ *     position is a confident answer about a place the player has left.
+ *   - Where they WILL be needs intent, which is not computable. Where they
+ *     COULD be is the reachable zone, and that is another branch.
+ *
+ * "The path is valid this far" is a claim the physics supports. A predicted
+ * rebound off a moving player is not, and would be the facing-ray mistake
+ * again: most confident exactly where it is most wrong.
+ *
+ * The stationary assumption degrades in the right direction — the nearer the
+ * blocker, the less time it has to move, so the shorter the truncated path
+ * the more trustworthy it is.
  * ---------------------------------------------------------------------------
  */
 
@@ -250,6 +276,37 @@ export function resolveCollisions(p, v, radius, bCoef, set) {
 }
 
 /**
+ * Earliest fraction along the segment from->to at which a disc of `radius`
+ * first touches a circle of radius R centred at c, or null if it never does.
+ *
+ * A swept test, not a point-in-circle test at the tick position: it is cheap
+ * insurance against tunnelling, and it puts the truncation mark where the ball
+ * would first make contact rather than where it happened to land that tick.
+ *
+ * @param {Vec2} from @param {Vec2} to @param {Vec2} c
+ * @param {number} R combined radius (ball + blocker)
+ * @returns {number|null} t in [0,1]
+ */
+function sweptCircleEntry(from, to, c, R) {
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const fx = from.x - c.x, fy = from.y - c.y;
+  const a = dx * dx + dy * dy;
+  const b = 2 * (fx * dx + fy * dy);
+  const cc = fx * fx + fy * fy - R * R;
+
+  if (a === 0) return cc <= 0 ? 0 : null;          // no movement this tick
+  const disc = b * b - 4 * a * cc;
+  if (disc < 0) return null;
+  const sq = Math.sqrt(disc);
+  const t0 = (-b - sq) / (2 * a);
+  const t1 = (-b + sq) / (2 * a);
+  if (t0 >= 0 && t0 <= 1) return t0;
+  if (t1 >= 0 && t1 <= 1) return t1;
+  if (t0 < 0 && t1 > 1) return 0;                  // started inside and stayed
+  return null;
+}
+
+/**
  * Forward-simulate the ball.
  *
  * Tick-exact while no player touches the ball. The moment a player does, the
@@ -271,30 +328,99 @@ export function resolveCollisions(p, v, radius, bCoef, set) {
  * @param {{pos:Vec2, vel:Vec2, radius:number, bCoef:number, damping:number}} ball
  * @param {ReturnType<typeof buildCollisionSet>} set
  * @param {number} maxTicks hard loop bound
- * @param {{stopSpeed?:number, maxDistance?:number}} [options]
+ * @param {{stopSpeed?:number, maxDistance?:number,
+ *          blockers?:{x:number,y:number,r:number,id?:*}[]}} [options]
  *   stopSpeed: treat the ball as at rest below this, ending the trace.
  *   maxDistance: stop once the path has covered this much ground.
+ *   blockers: per-tick circles (players) that END the trace on contact rather
+ *     than bouncing it. See the header for why truncating is the honest
+ *     treatment. A blocker already overlapping the ball at the start is
+ *     ignored UNTIL THE BALL SEPARATES FROM IT, then becomes live again —
+ *     including the player doing the kicking. See the latch below.
  * @returns {{points:Vec2[], bounces:{index:number, pos:Vec2}[],
- *            stopped:boolean, travelled:number}}
+ *            stopped:boolean, travelled:number,
+ *            blocked:{index:number, pos:Vec2, id:*}|null}}
  *   `stopped` is true only when the ball actually came to rest inside the
  *   trace — not when the trace merely ran out of room. Only then is the last
  *   point a real resting place.
+ *   `blocked` is non-null when a blocker ended the trace; beyond that point
+ *   the prediction says nothing, rather than saying the ball carries on.
  */
 export function predictBallPath(ball, set, maxTicks, options = {}) {
-  const { stopSpeed = 0.1, maxDistance = Infinity } = options;
+  const { stopSpeed = 0.1, maxDistance = Infinity, blockers = [] } = options;
   const p = { x: ball.pos.x, y: ball.pos.y };
   const v = { x: ball.vel.x, y: ball.vel.y };
   const d = ball.damping;
+
+  // A blocker touching the ball right now is the CURRENT contact, not a
+  // future block — without this, every trace from a carried ball truncates at
+  // zero length against the carrier.
+  //
+  // THE RELEASE CONDITION IS DIRECTION, NOT DISTANCE. Two bugs were needed to
+  // find that. Excluding an overlapping blocker for the whole trace drew the
+  // cue through the kicker's own body when a ball played into a corner came
+  // back. Releasing on separation instead fixed that but not the harder case:
+  // press the ball against a wall and the predicted path is into the wall,
+  // bounce, straight back into you, entirely inside your own body radius. The
+  // ball never separates, so a distance-based latch never re-arms and the cue
+  // draws through you again.
+  //
+  // What actually distinguishes "resting on me" from "about to hit me" is
+  // which way the ball is going. So an overlapping blocker stays suppressed
+  // only while the ball is moving AWAY from it, and goes live the moment the
+  // velocity turns back toward it — separated or not.
+  const suppressed = blockers.map(
+    (b) => Math.hypot(ball.pos.x - b.x, ball.pos.y - b.y) <= ball.radius + b.r,
+  );
 
   const points = [];
   const bounces = [];
   let travelled = 0;
   let stopped = false;
+  let blocked = null;
 
   for (let t = 0; t < maxTicks; t++) {
     const fromX = p.x, fromY = p.y;
     p.x += v.x;
     p.y += v.y;
+
+    // Swept against the tick's whole displacement, before geometry is
+    // resolved: a player standing in front of a wall blocks the ball on the
+    // way in, not after the wall has already turned it around.
+    if (blockers.length) {
+      let best = null;
+      for (let i = 0; i < blockers.length; i++) {
+        const b = blockers[i];
+        const R = ball.radius + b.r;
+        if (suppressed[i]) {
+          // Clear of it: an ordinary separation, measured at the START of the
+          // tick so separating and re-entering within one tick is impossible.
+          const clear = Math.hypot(fromX - b.x, fromY - b.y) > R;
+          // Or still overlapping but now heading back INTO it — the pressed
+          // -against-a-wall case, where separation never happens.
+          const closing = v.x * (b.x - fromX) + v.y * (b.y - fromY) > 0;
+          // Never on the first tick: the ball has to be allowed to leave
+          // before it can be said to be arriving, and a trace of zero length
+          // reads as a broken overlay rather than as "nothing happens".
+          if (clear || (t > 0 && closing)) suppressed[i] = false;
+          else continue;
+        }
+        const tt = sweptCircleEntry(
+          { x: fromX, y: fromY }, { x: p.x, y: p.y }, { x: b.x, y: b.y }, R,
+        );
+        if (tt !== null && (best === null || tt < best.t)) best = { t: tt, b };
+      }
+      if (best) {
+        const hit = {
+          x: fromX + (p.x - fromX) * best.t,
+          y: fromY + (p.y - fromY) * best.t,
+        };
+        travelled += Math.hypot(hit.x - fromX, hit.y - fromY);
+        points.push(hit);
+        blocked = { index: points.length - 1, pos: hit, id: best.b.id };
+        break;
+      }
+    }
 
     const vxBefore = v.x, vyBefore = v.y;
     resolveCollisions(p, v, ball.radius, ball.bCoef, set);
@@ -312,7 +438,7 @@ export function predictBallPath(ball, set, maxTicks, options = {}) {
     if (travelled >= maxDistance) break;
   }
 
-  return { points, bounces, stopped, travelled };
+  return { points, bounces, stopped, travelled, blocked };
 }
 
 /**

@@ -8,10 +8,10 @@
  *
  * Run:  node scripts/validate-aim-assist.mjs [--trials 300] [--ticks 120]
  *
- * PASS requires all four checks below.
+ * PASS requires all five checks below.
  *
  * ---------------------------------------------------------------------------
- * WHY THERE ARE FOUR CHECKS AND NOT ONE
+ * WHY THERE ARE FIVE CHECKS AND NOT ONE
  *
  * On feat/ball-trajectory the physics validator passed at 1e-13 while the
  * overlay shipped a stop marker whose draw condition could never be true. The
@@ -29,9 +29,36 @@
  *                  reachable in a state the overlay will really be in.
  *                  Specifically: a resting place must be findable inside the
  *                  default horizon, or the stop marker is dead code again.
+ *   5. BLOCKERS   — a player standing in the path truncates the trace, and
+ *                  truncates it BEFORE the engine's own path diverges. Also
+ *                  that the current contact is suppressed as a LATCH rather
+ *                  than a permanent exclusion, released on DIRECTION rather
+ *                  than distance — so both a ball played into a corner and a
+ *                  ball pressed against a wall truncate on the player they
+ *                  come back into.
  *
  * A failure in 1-3 means the model is wrong. DO NOT loosen the tolerance.
  * A failure in 4 means the overlay is drawing something it can never draw.
+ * A failure in 5 means the overlay is drawing through a body.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY CHECK 5 EXISTS, AND WHY IT IS LATE
+ *
+ * Check 1 parks every player at (6000, 6000) every tick, on purpose — it is
+ * validating ball-vs-geometry. But that means the harness CONSTRUCTS A WORLD
+ * IN WHICH BALL-VS-PLAYER CANNOT HAPPEN, so its p99 of 2.93e-13 was never
+ * evidence about players and never could have been. Both overlays shipped
+ * drawing straight through bodies the engine really does deflect the ball off.
+ *
+ * That is pitfall 9 again, and the most expensive instance in this project:
+ * the earlier ones each hid a single wrong number, this one hid an entire
+ * class of situation. A validator's exclusions are load-bearing claims about
+ * what it does NOT prove, and they need writing down next to the number.
+ *
+ * Then check 5 sprang the same trap twice MORE while being written — two test
+ * walls that could not return the ball far enough to show the effect, each
+ * reporting a confident failure of a fix that was already correct. Both
+ * reasons are recorded at the check itself. Do not move that wall back.
  */
 import { createRequire } from 'module';
 import { predictBallPath, buildCollisionSet } from '../src/features/analytics/ballTrajectory.js';
@@ -355,9 +382,137 @@ const reachablePass = stopReachable && bounceReachable && wedgeReachable && lead
 console.log(reachablePass ? 'PASS' : 'FAIL');
 
 // ===========================================================================
+// 5. BLOCKERS — a body in the path truncates the trace, and does so in time
+// ===========================================================================
+// The opposite of check 1: instead of parking the players, put one in the way.
+console.log('\n=== 5. players truncate the path ===');
+
+let blockerPass = true;
+{
+  // Ball launched along +x from the middle; a stationary player planted ahead.
+  const by = 0, bx = -300;
+  const speed = 8;
+  const standAt = bx + 180;
+
+  const blockers = [{ x: standAt, y: by, r: PLAYER_RADIUS, id: 7 }];
+  const withB = predictBallPath(
+    { pos: { x: bx, y: by }, vel: { x: speed, y: 0 }, radius: ballSpec.radius, bCoef: ballSpec.bCoef, damping: ballSpec.damping },
+    set, 200, { blockers },
+  );
+  const without = predictBallPath(
+    { pos: { x: bx, y: by }, vel: { x: speed, y: 0 }, radius: ballSpec.radius, bCoef: ballSpec.bCoef, damping: ballSpec.damping },
+    set, 200, {},
+  );
+
+  const expectedX = standAt - (PLAYER_RADIUS + ballSpec.radius);
+  const gotX = withB.blocked ? withB.blocked.pos.x : NaN;
+  console.log(`  blocked: ${!!withB.blocked}  at x ${gotX.toFixed(3)}  expected ${expectedX.toFixed(3)}  ` +
+              `points ${withB.points.length} vs ${without.points.length} unblocked`);
+  const truncates = !!withB.blocked
+    && Math.abs(gotX - expectedX) < 1e-9
+    && withB.points.length < without.points.length;
+
+  // And the engine agrees the path stops being valid there: run it for real
+  // with a player standing at that spot and see where the ball deviates from
+  // the unblocked prediction.
+  place(standAt, by, bx, by, speed, 0);
+  let deviateAt = null;
+  for (let t = 0; t < 60; t++) {
+    room.runSteps(1);
+    const gs = room.gameState;
+    if (!gs) break;
+    // hold the blocker still; we are testing "does contact happen here", not
+    // what the player does afterwards
+    const live = gs.physicsState.discs;
+    live[PLAYER_DISC].pos.x = standAt; live[PLAYER_DISC].pos.y = by;
+    live[PLAYER_DISC].speed.x = 0; live[PLAYER_DISC].speed.y = 0;
+    const b = live[0];
+    if (Math.hypot(b.pos.x - without.points[t].x, b.pos.y - without.points[t].y) > 0.5) { deviateAt = t; break; }
+  }
+  const blockedTick = withB.points.length - 1;
+  console.log(`  engine diverges from the unblocked path at tick ${deviateAt}; trace truncates at tick ${blockedTick}`);
+
+  // Truncating no later than the divergence is the requirement. Earlier is
+  // fine and is the safe direction; later means we drew through a body.
+  const inTime = deviateAt !== null && blockedTick <= deviateAt;
+
+  // The carrier must NOT truncate the trace at zero length.
+  const carrier = predictBallPath(
+    { pos: { x: 0, y: 0 }, vel: { x: 5, y: 0 }, radius: ballSpec.radius, bCoef: ballSpec.bCoef, damping: ballSpec.damping },
+    set, 60, { blockers: [{ x: -20, y: 0, r: PLAYER_RADIUS, id: 9 }] },
+  );
+  console.log(`  overlapping carrier ignored: ${carrier.blocked === null} (${carrier.points.length} points)`);
+  const carrierOk = carrier.blocked === null && carrier.points.length > 10;
+
+  // THE REBOUND CASE. Kick into a wall and the ball comes back to the player
+  // who kicked it. They started in contact, so suppressing the current contact
+  // PERMANENTLY draws the cue line straight through their own body — the bug
+  // this check exists to catch. The suppression has to be a latch that re-arms
+  // once the ball separates.
+  //
+  // Against a LIVELY wall, deliberately. The classic map's side wall returns
+  // almost nothing (measured e ~ 0.03: a 7-speed ball dies 22 units off it and
+  // never comes back), so a test built on it cannot produce the phenomenon and
+  // would report a confident pass — pitfall 9, in the validator itself. This
+  // one uses a synthetic bCoef-1.0 plane so the return is guaranteed.
+  // The wall is deliberately CLOSE. e = ball.bCoef * wall.bCoef = 0.5 even
+  // against a perfect wall, so a long outbound run damps the ball and halves
+  // what is left: from 500 units out it returns only as far as x = 237 and the
+  // check passes for the wrong reason. Near wall, fast arrival, long return.
+  const livelyGeom = {
+    planes: [{ normal: { x: -1, y: 0 }, dist: -100, bCoef: 1, cMask: 0, cGroup: 32 }],
+    segments: [], vertices: [], discs: [],
+  };
+  const livelySet = buildCollisionSet(livelyGeom, ballSpec);
+  const kicker = { x: 0, y: 0, r: PLAYER_RADIUS, id: 3 };
+  const rebound = predictBallPath(
+    { pos: { x: 20, y: 0 }, vel: { x: 10, y: 0 },        // gap 20 < 25: overlapping
+      radius: ballSpec.radius, bCoef: ballSpec.bCoef, damping: ballSpec.damping },
+    livelySet, 400, { blockers: [kicker] },
+  );
+  const reboundOk = rebound.bounces.length > 0
+    && rebound.blocked !== null
+    && rebound.blocked.index > rebound.bounces[0].index;
+  console.log(`  rebound onto the kicker: bounces ${rebound.bounces.length}, ` +
+              (rebound.blocked
+                ? `blocked at x ${rebound.blocked.pos.x.toFixed(2)} (expected ${(kicker.x + PLAYER_RADIUS + ballSpec.radius).toFixed(2)}), after the bounce: ${reboundOk}`
+                : 'NOT BLOCKED — the cue would draw through the kicker'));
+
+  // PRESSED INTO A WALL. The ball is jammed between the player and a wall, so
+  // the predicted path is into the wall, bounce, straight back — the whole of
+  // it inside the player's own body radius. The ball NEVER separates, so a
+  // distance-based latch never re-arms and the cue draws straight through
+  // them. Only a direction-based release catches this.
+  const pressWall = {
+    planes: [{ normal: { x: -1, y: 0 }, dist: -100, bCoef: 1, cMask: 0, cGroup: 32 }],
+    segments: [], vertices: [], discs: [],
+  };
+  const pressSet = buildCollisionSet(pressWall, ballSpec);
+  const presser = { x: 70, y: 0, r: PLAYER_RADIUS, id: 4 };
+  const pressed = predictBallPath(
+    { pos: { x: 90, y: 0 }, vel: { x: 6, y: 0 },      // ball on the wall, gap 20 to the player
+      radius: ballSpec.radius, bCoef: ballSpec.bCoef, damping: ballSpec.damping },
+    pressSet, 200, { blockers: [presser] },
+  );
+  const maxGap = Math.max(...pressed.points.map((q) => Math.hypot(q.x - presser.x, q.y - presser.y)));
+  console.log(`  pressed against a wall: ball never separates (max gap ${maxGap.toFixed(1)} vs R ` +
+              `${(ballSpec.radius + presser.r).toFixed(1)}), ` +
+              (pressed.blocked
+                ? `blocked at tick ${pressed.blocked.index} — correct`
+                : `NOT BLOCKED over ${pressed.points.length} ticks — the cue would draw through them`));
+  const pressOk = pressed.blocked !== null
+    && maxGap <= ballSpec.radius + presser.r        // confirms separation really never happens
+    && pressed.points.length > 1;                   // and the line is not degenerate
+
+  blockerPass = truncates && inTime && carrierOk && reboundOk && pressOk;
+}
+console.log(blockerPass ? 'PASS' : 'FAIL');
+
+// ===========================================================================
 console.log('\n' + '='.repeat(60));
-const all = physicsPass && rangePass && wedgePass && reachablePass;
+const all = physicsPass && rangePass && wedgePass && reachablePass && blockerPass;
 console.log(`physics ${physicsPass ? 'PASS' : 'FAIL'}   range ${rangePass ? 'PASS' : 'FAIL'}   ` +
-            `wedge ${wedgePass ? 'PASS' : 'FAIL'}   reachable ${reachablePass ? 'PASS' : 'FAIL'}`);
+            `wedge ${wedgePass ? 'PASS' : 'FAIL'}   reachable ${reachablePass ? 'PASS' : 'FAIL'}   ` +
+            `blockers ${blockerPass ? 'PASS' : 'FAIL'}`);
 console.log(all ? 'ALL PASS' : 'FAILED');
 process.exit(all ? 0 : 1);
