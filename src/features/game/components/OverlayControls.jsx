@@ -10,6 +10,11 @@ import React from "react";
 export const OVERLAY_FEATURES = [
   { key: "momentum", label: "Momentum" },
   { key: "trajectory", label: "Ball path" },
+  { key: "aimAssist", label: "Aim assist" },
+  // A sub-option OF aim assist, not a feature of its own: `parent` makes it
+  // render indented under its owner and disabled while the owner is off, so
+  // it cannot be left on in a state where it does nothing.
+  { key: "aimAssistLeadIn", label: "on approach", parent: "aimAssist" },
 ];
 
 /**
@@ -54,16 +59,30 @@ export default function OverlayControls({ settings, onChange }) {
       </label>
 
       <div className="overlay-controls-features">
-        {OVERLAY_FEATURES.map(({ key, label }) => (
-          <label key={key} className="overlay-controls-feature-row">
-            <input
-              type="checkbox"
-              checked={!!settings.features[key]}
-              onChange={() => toggleFeature(key)}
-            />
-            {label}
-          </label>
-        ))}
+        {OVERLAY_FEATURES.map(({ key, label, parent }) => {
+          // A sub-option is inert while its owner is off, so it is shown
+          // disabled rather than left looking like an independent switch that
+          // silently does nothing.
+          const disabled = !!parent && !settings.features[parent];
+          return (
+            <label
+              key={key}
+              className={
+                "overlay-controls-feature-row" +
+                (parent ? " overlay-controls-feature-child" : "") +
+                (disabled ? " is-disabled" : "")
+              }
+            >
+              <input
+                type="checkbox"
+                checked={!!settings.features[key]}
+                disabled={disabled}
+                onChange={() => toggleFeature(key)}
+              />
+              {label}
+            </label>
+          );
+        })}
       </div>
 
       <div className="overlay-controls-teams">

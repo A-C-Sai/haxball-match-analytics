@@ -23,7 +23,7 @@
  * discrete damping model: v_(n+1) = v_n * damping + acceleration, which
  * converges to v = acceleration / (1 - damping).
  */
-function estimateTerminalSpeed(playerPhysics) {
+export function estimateTerminalSpeed(playerPhysics) {
   const { acceleration = 0, damping = 1 } = playerPhysics ?? {};
   const denom = 1 - damping;
   if (denom <= 0) return 0;

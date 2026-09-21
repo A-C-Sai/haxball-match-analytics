@@ -33,6 +33,7 @@ import {
   drawMomentumArrows,
 } from "../analytics/momentumOverlay.js";
 import { computeBallTrace, drawBallTrace } from "../analytics/ballTrajectoryOverlay.js";
+import { computeAimAssist, drawAimAssist } from "../analytics/aimAssistOverlay.js";
 
 /**
  * ReplayView.jsx
@@ -109,6 +110,9 @@ export default function ReplayView() {
   // Latest ball trajectory, recomputed once per tick by the analytics hook
   // and read by the rAF draw below. A ref, not state — it changes every tick.
   const traceRef = useRef(null);
+  // Latest aim-assist cue line, same rate split: computed per tick, drawn
+  // per frame.
+  const aimRef = useRef(null);
   const chatBoxRef = useRef(null);
   const chatInputRef = useRef(null);
   const rendererRef = useRef(null);
@@ -147,10 +151,14 @@ export default function ReplayView() {
   const [showRoomInfo, setShowRoomInfo] = useState(false);
   const [popup, setPopup] = useState(null);
 
+
+  // Declared above the analytics hook on purpose: `onTick` reads
+  // overlaySettingsRef, and the tick closure must not reference a binding
+  // declared further down the component.
   const [overlaySettings, setOverlaySettings] = useState({
     enabled: true,
     team: "both",
-    features: { momentum: true, trajectory: true },
+    features: { momentum: true, trajectory: true, aimAssist: true, aimAssistLeadIn: true },
   });
   const overlaySettingsRef = useRef(overlaySettings);
   useEffect(() => {
@@ -177,6 +185,18 @@ export default function ReplayView() {
       // Horizon defaults are distance-based (see computeBallTrace); a tick
       // count is the wrong unit once damping is in play.
       traceRef.current = computeBallTrace(room.state, geometry, room.stadium);
+
+      // The cue line. A replay has no local player (`currentPlayerId` is -1),
+      // so computeAimAssist falls back to whoever currently has the ball
+      // inside their own kick range — which follows the action, and is the
+      // more useful choice for review anyway.
+      const settings = overlaySettingsRef.current;
+      // The lead-in band is ALWAYS computed — the ball halo needs it whether
+      // or not the path preview is shown on approach. The toggle is applied
+      // at draw time instead.
+      aimRef.current = settings.features.aimAssist
+        ? computeAimAssist(frame, geometry, room.stadium, room.currentPlayerId ?? -1, { team: settings.team })
+        : null;
     },
   });
 
@@ -428,6 +448,14 @@ export default function ReplayView() {
             // corridor rather than under it.
             if (settingsNow.features.trajectory && traceRef.current) {
               drawBallTrace(ctx, traceRef.current, transform);
+            }
+
+            // Aim assist after the ball path so the counterfactual cue reads
+            // on top of the actual corridor rather than under it.
+            if (settingsNow.features.aimAssist && aimRef.current) {
+              drawAimAssist(ctx, aimRef.current, transform, {
+                showLineOutOfRange: !!settingsNow.features.aimAssistLeadIn,
+              });
             }
 
             if (settingsNow.features.momentum) {

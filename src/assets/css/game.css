@@ -3671,6 +3671,19 @@ a:hover {
     cursor: pointer;
 }
 
+/* Sub-option of the row above it: indented, smaller, and visibly inert while
+   its parent feature is switched off. */
+.overlay-controls-feature-child {
+    margin-left: 18px;
+    font-size: 0.9em;
+    opacity: 0.85;
+}
+
+.overlay-controls-feature-row.is-disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
 .overlay-controls-teams {
     display: flex;
     flex-direction: row;

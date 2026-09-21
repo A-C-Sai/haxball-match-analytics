@@ -404,9 +404,10 @@ The overlay is the smaller half of what this branch produced. The lasting
 parts are:
 
 - **`ballTrajectory.js`** — a validated, entity-agnostic collision model.
-  Most of roadmap item 8 (the raycast primitive) arriving early and in
-  stronger form, since it handles the bouncing case a straight-line
-  `canReach` cannot.
+  Most of roadmap item 8 (`feat/raycast`) arriving early and in stronger
+  form, since it handles the bouncing case a straight-line `canReach`
+  cannot. What is left for that branch is the cheap boolean early-out,
+  extracted from the same collision set.
 - **[DOMAIN.md § Ball physics](DOMAIN.md#ball-physics)** — reflection is not
   symmetric, the ball never curves, and the path cannot be raycast.
 - **[DOMAIN.md § Kicking](DOMAIN.md#kicking)** — measured while scoping what
@@ -420,6 +421,10 @@ what the eye supplies. The predictive version, showing what a kick *would* do,
 is the one worth having, and it is now cheap because the physics underneath it
 is measured.
 
-**Next: `feat/aim-assist`.** Post-kick velocity is one line
-(`ball.velocity + kickStrength · n̂`), fed to this branch's predictor. See
-[roadmap](README.md#roadmap) item 9.
+**Two things came back to this branch later.** The unreachable stop marker
+found here became a standing validator check — every overlay since tests that
+each drawn element can actually fire, not just that the maths is right, and
+that check has caught a second dead branch. And the
+descriptive/predictive framing got sharpened on `feat/aim-assist`: the value
+of a cue turned out to be *contradicting a belief* more than supplying missing
+data, which is a better filter than "predictive" alone.

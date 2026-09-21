@@ -4,22 +4,33 @@ Computer-assisted analysis on top of live Haxball games — line of sight,
 passing lanes, space and commitment — built as a fork of the open-source
 Haxball client.
 
-The aim is to **show the possibilities and aid decision making**: expand what
-a player can consider, not decide for them. That distinction drives most of
-what follows.
+The aim is to **show the possibilities and aid decision making**: sharpen what
+a player can consider, never act for them. The tool may filter and rank —
+attention is scarce and an unfiltered dump is worse than useless — but the
+human reads it and makes the move. That distinction drives most of what
+follows.
 
 ---
 
 ## Documentation layout
 
-| Document | Scope |
-| --- | --- |
-| **README.md** (this file) | Overview, design principles, architecture, roadmap |
-| [DOMAIN.md](DOMAIN.md) | How the game works, verified findings, pitfalls. Branch-agnostic. |
-| [README-replay.md](README-replay.md) | `feat/replays` — `.hbr2` playback |
-| [README-session-event-capture.md](README-session-event-capture.md) | `feat/session-event-capture` — data layer + physics validation |
-| [README-ball-trajectory.md](README-ball-trajectory.md) | `feat/ball-trajectory` — live ball path overlay at true ball width |
-| [README-aim-assist.md](README-aim-assist.md) | `feat/aim-assist` — what a kick *would* do. Planned, not started |
+Each file has one job, and only one of them goes stale.
+
+| Document | Scope | Changes when |
+| --- | --- | --- |
+| [PROGRESS.md](PROGRESS.md) | **Where the project is.** What is done, what to do next, what is deferred and why. | every branch |
+| **README.md** (this file) | Design principles, architecture, prior art, and the roadmap — what each possible feature *is* | a principle or an item changes |
+| [DOMAIN.md](DOMAIN.md) | How the game works, verified findings, pitfalls. Branch-agnostic. | something is measured |
+| [README-replay.md](README-replay.md) | `feat/replays` — `.hbr2` playback | never (permanent record) |
+| [README-session-event-capture.md](README-session-event-capture.md) | `feat/session-event-capture` — data layer + physics validation | never (permanent record) |
+| [README-ball-trajectory.md](README-ball-trajectory.md) | `feat/ball-trajectory` — live ball path overlay at true ball width | never (permanent record) |
+| [README-aim-assist.md](README-aim-assist.md) | `feat/aim-assist` — the cue line: where the ball would actually go if kicked now | never (permanent record) |
+
+**Branch READMEs are permanent records**, not status pages. They say what was
+built, how, and what went wrong. **None of them says what comes next** — that
+is [PROGRESS.md](PROGRESS.md)'s job, and keeping it in one place is why it can
+be trusted. A "Next" section in five files is five things to go stale, and
+three of them had.
 
 **Read [DOMAIN.md](DOMAIN.md) before writing any analytics.** Several
 plausible feature ideas die on that page, and every pitfall listed there cost
@@ -29,31 +40,17 @@ real debugging time to find.
 
 ## Status
 
-| Branch | State |
-| --- | --- |
-| `feat/replays` | ~~Merged~~ — `.hbr2` playback, shared renderer, analytics hook runs unmodified |
-| `feat/session-event-capture` | ~~Complete~~ — events + game state captured, reachable-zone formula validated at 100% |
-| `feat/ball-trajectory` | ~~Complete~~ — tick-exact ball predictor (p99 2.4e-13), live overlay drawn at the ball's true width |
-| *next* | `feat/aim-assist` — what a kick *would* do. Kick mechanics are measured ([DOMAIN.md § Kicking](DOMAIN.md#kicking)), so it is mostly wiring |
+**See [PROGRESS.md](PROGRESS.md).** Branch states, what is next and why, what
+is deferred and for what reason, and the open decisions all live there — in
+one file, so there is one thing to update and one thing to trust.
 
-**What exists:** a working data layer (per-tick extraction, per-map geometry,
-engine events, NDJSON session logging), replay playback as a test bench, a
-tick-exact ball trajectory predictor with a validator behind it, and two
-overlay features — momentum arrows and the ball path.
+This file stays with the parts that do not change branch to branch: the design
+principles, the architecture, the prior art, and the roadmap of what each
+possible feature is.
 
-**What does not:** any analytics function about *players*. No LOS, no passing
-lanes, no dominance, no commitment. Everything shipped so far is about the
-ball, which is the easy half — the ball has no intentions and cannot
-accelerate itself.
+---
 
-**The framing lesson so far.** Both shipped overlays are *descriptive*: they
-show what is already happening, which is largely what the eye supplies. The
-ball-path branch made that concrete — it is accurate to floating point and
-still mostly restates the visible. The valuable class is *predictive*: what
-would happen if you acted. That is what `feat/aim-assist` is, and why it comes
-before anything else on the list.
-
-### The momentum overlay, and what it was actually for
+## The momentum overlay, and what it was actually for
 
 It stays. Not as the live feature it was built to be, but because building it
 produced the infrastructure everything else draws through:
@@ -145,15 +142,44 @@ off-screen things are not drawn at all. That is a genuine perceptual limit,
 unlike a vision cone which would be artificial. It turns filter 3 into a test
 — *is this currently on screen?*
 
-### Enumerate, do not recommend
+### Advise, never act
 
-Enumeration expands thinking: here are three outlets, one you had not seen.
-Recommendation replaces it: pass to 5. The second demos better and is worse
-for the player — it trains dependence and stops teaching the moment it is
-switched off. It is also the version that reads unambiguously as cheating.
+**The line is not enumerate-versus-recommend. It is advise-versus-act.**
 
-Ranking, if ever wanted, is a separate optional layer — never fused into the
-base display.
+The tool may filter, rank and surface a shortlist. What it must never do is
+take the action. The human reads the display and makes the move — always, with
+no exceptions and no automation path. That is the boundary that matters, and it
+is the one that stays stable under pressure to make the overlay more useful.
+
+An earlier formulation of this principle said "enumerate, do not recommend",
+and treated any ranking as the failure mode. That was wrong on its own terms.
+**Every filter is an implicit ranking**, so "never recommend" is not achievable
+— and showing all options at once is itself a choice, and the worst available
+one. An unranked dump of every open lane makes the player pay the full
+attention cost *and* still rank them under time pressure, which is exactly the
+work the tool exists to absorb. For a live player, more options is not more
+help.
+
+What made "pass to 5" objectionable was never the ranking. It was the
+**collapse**: one directive with the reasoning discarded. That trains
+dependence and stops teaching the moment it is switched off. So the constraints
+on a ranked display are:
+
+- **Show the criterion, not just the order.** Why this outlet ranks where it
+  does — lane quality γ, ticks to aim, who contests it. The player should be
+  able to disagree with the ranking and see what they are disagreeing with.
+- **Never reduce to a single unexplained imperative.** A shortlist with visible
+  reasons is assistance; a bare arrow is a remote control.
+- **Keep the null action in the set** (see below), or the ranking quietly
+  recommends acting.
+- **Prefer filters that remove options for physical reasons.** "You cannot aim
+  there in time" is a fact; "this pass is worse" is a judgement. The aiming
+  gate (roadmap item 9) is the least contentious kind of filter there is, and
+  the most defensible place to do the cutting.
+
+Filtering hard enough is not a compromise of this principle — it is required by
+[Attention is the binding constraint](#attention-is-the-binding-constraint).
+The two sections say the same thing from opposite ends.
 
 ### The enumeration must include the null action
 
@@ -177,6 +203,43 @@ The target is live play, so the overlay competes with the game. Clutter is
 negative, not neutral. The best version probably shows nothing most of the
 time and surfaces one cue only when actionable. Continuous display trains
 people to stop looking.
+
+This is the same constraint as [Advise, never act](#advise-never-act) seen
+from the other side. Surfacing one cue *is* a filter with a threshold of one,
+and it is the right default — not a reluctant compromise of some purer
+enumeration. The question for any feature is therefore not "how many options
+can we show" but **how few, and on what stated criterion**.
+
+### A state change with no change in available action is not worth drawing
+
+From `feat/aim-assist`. A "you are touching the ball" cue was built, and was
+wrong twice over. Crossing into contact does not change the kick — the impulse
+is identical either way — so it reported a fact the player could no longer act
+on: by the time it lit up, the ball had already been nudged. And the dribble
+physics crosses that threshold every few ticks, so it fired several times a
+second.
+
+**The test is not "is this true" but "does this alter what is available".** A
+cue that changes state without the choice changing is noise, however accurate,
+and a threshold the game naturally oscillates across will chatter — the same
+argument that puts hysteresis on [topological
+events](#team-structure-is-a-graph-not-a-polygon).
+
+### Different claims decay at different rates and cannot share a fade
+
+Also from `feat/aim-assist`, and the more reusable of the two. A cue
+contingent on something that has not happened yet should weaken as that thing
+gets less certain. A cue stating a fact about right now should not.
+
+Those were initially gated together — the aim cue line fades with distance,
+and the ball halo inherited the fade even though it answers "how close am I to
+being able to kick", which is true right now and is *most* needed during the
+approach. Turning the path preview off also blinded the approach.
+
+**Group cues by how their truth decays, not by which feature they arrived
+with.** In practice that usually means computing unconditionally and gating at
+draw time, so a display choice cannot silently remove information that was
+never contingent.
 
 ### Prefer the exact computation
 
@@ -237,7 +300,10 @@ A bottom-right menu (`OverlayControls.jsx`) with three independent concerns:
   renders, whatever the feature checkboxes say.
 - **`features`** — a per-feature on/off map driven by the
   `OVERLAY_FEATURES` registry. Adding a feature means one registry entry, one
-  default in `Game.jsx`, one gating check in the draw loop.
+  default in `Game.jsx`, one gating check in the draw loop. A registry entry
+  may declare a `parent`, which renders it indented and disabled while its
+  owner is off — so a sub-option cannot be left switched on in a state where
+  it does nothing.
 - **`team`** — `"both" | 1 | 2`, shared across all features.
 
 Session-only by design — no persistence.
@@ -367,7 +433,11 @@ and receiver. No raycasting or sampling.
 **The decision-maker pattern (Maleki).** Phase one asks *can this action be
 performed at all*, through boolean Decision Makers. Phase two picks among
 survivors. **Take phase one, discard phase two** — a feasibility filter is an
-enumeration engine. Also: pass viability as `t₁ < t(i)` for every opponent,
+enumeration engine. The discard is about *autonomy*, not about ordering: their
+phase two picks an action and then executes it with no human in the loop.
+Ordering the survivors for a human to read is fine and often necessary (see
+[Advise, never act](#advise-never-act)); handing the result to a controller is
+not. Also: pass viability as `t₁ < t(i)` for every opponent,
 and shot viability by discretising the goal mouth into n positions.
 
 **Space as distance to the nearest opponent (half-space).** The crudest metric
@@ -439,7 +509,8 @@ uninstrumented games.
 ## Roadmap
 
 Each overlay feature is a **feasibility filter** answering "is this action
-available right now", never a chooser.
+available right now" — and, where it helps, how the survivors order. Never an
+actor: nothing here ever touches the input path.
 
 Every item below says what it is, why it is needed, and — where the honest
 answer is "not yet obviously" — says that too. The ordering is not a strict
@@ -490,7 +561,7 @@ supports.
 
 ### The foundational primitive
 
-**5. The tick-parameterised reachable zone in the live path**
+**5. The tick-parameterised reachable zone in the live path** — `feat/reachable-zone`
 
 *What:* for any player, the region they can occupy in N ticks — an octagon
 whose centre is displaced by current momentum. Already written and validated in
@@ -498,8 +569,16 @@ whose centre is displaced by current momentum. Already written and validated in
 *Why:* this is the single primitive everything else is built from. "Who gets
 there first", "is this player committed", "whose territory is this" are all the
 same question asked with different N. Porting it is mostly moving code.
+*Status:* validated at 100% against a full recorded 6v6 with the bound tight
+(see [README-session-event-capture.md](README-session-event-capture.md)) and
+**still not in the live path.** It is the only unported primitive that other
+branches are already waiting on — `feat/interception` cannot start without it,
+items 6, 12 and 17 all reduce to it, and it is the first thing on the list that
+puts something on screen the eye cannot supply. It is a port, not a
+derivation: the formula is settled and the seven things that were wrong with
+it have already been found.
 
-**6. Commitment**
+**6. Commitment** — `feat/commitment`
 
 *What:* the largest N for which a player physically cannot get back to where
 they are standing now. A player sprinting one way has a number of ticks during
@@ -511,17 +590,18 @@ the near post. It replaces the arbitrary fraction-of-terminal-speed cutoff
 currently in `momentumOverlay.js` with a number that means something.
 *Cost:* small. It needs item 5 and nothing else.
 
-**7. Orbit slew rate**
+**7. Orbit slew rate** — `feat/orbit-cost`
 
 *What:* how fast a player holding the ball can swing it around themselves —
 `ω = v / (r_player + r_ball)`, arithmetic from radii and per-map speed.
 *Why:* it converts "I want to shoot that way" into "that takes me 8 ticks to
 line up", which is what makes an aiming window a real constraint rather than a
-drawn line. Feeds item 9.
+drawn line. This is the whole of `feat/orbit-cost`, and the direct answer to
+"should I correct my orientation" that the cue line raises but cannot answer.
 
 ### Geometry
 
-**8. The raycast primitive** — *partly delivered early by `feat/ball-trajectory`*
+**8. The raycast primitive** — `feat/raycast`, *partly delivered early by `feat/ball-trajectory`*
 
 *What:* `canReach(from, to, radius, cGroup, cMask)` — is the straight line
 between two points clear for *this specific entity*, accounting for segments,
@@ -537,7 +617,7 @@ straight-line `canReach` cannot. What remains is the cheap early-out form: a
 boolean "is this segment clear" that does not simulate. Extract it from the
 same collision set rather than writing new geometry code.
 
-**9. The aiming gate** — *mechanics now verified, see [DOMAIN.md § Kicking](DOMAIN.md#kicking)*
+**9. The aiming gate** — *split; see below. Mechanics verified, see [DOMAIN.md § Kicking](DOMAIN.md#kicking)*
 
 *What:* for each candidate target, the angle you must turn through and the
 ticks that takes (θ and `t_θ`), plus the cone of directions you can currently
@@ -547,10 +627,29 @@ overlay would list passes that are geometrically open and physically
 impossible. Built as a filter inside the feasibility layer — never a drawn cone
 on screen, which would just be clutter.
 *Status:* the kick itself is now fully measured — range, impulse, direction,
-arming behaviour and the pass/trap threshold. Enough to build a live aim
-assist, which is the predictive feature the trajectory overlay turned out not
-to be. Note the measured trap: a facing-ray aim assist is wrong by up to 50°
-whenever the ball is moving.
+arming behaviour and the pass/trap threshold. Note the measured trap: a
+facing-ray aim assist is wrong by up to 50° whenever the ball is moving.
+
+This item has since split. The **θ and `t_θ` half** — the cost of correcting
+an orientation — is `feat/orbit-cost`, and it is a filter, as described above.
+The **cone half** is subtler than first written: there are two separate cones,
+and only one of them is a time cost.
+
+- The *orbit* cone, already in [DOMAIN.md § The capability
+  cone](DOMAIN.md#the-capability-cone): directions reachable within `t` ticks
+  of orbiting. Widens with time on the ball.
+- The *reachable wedge*, **now measured** on `feat/aim-assist`: since a fixed
+  impulse is added to the ball's current velocity, the achievable post-kick
+  velocities form a circle of radius `kickStrength` centred on
+  `ball.velocity`. When the ball is moving faster than `kickStrength`, only a
+  wedge of half-angle `arcsin(kickStrength / |v_ball|)` is reachable **at
+  all** — 56.44° at ball speed 6 — and no amount of orbiting escapes it.
+
+The first is "you cannot aim there *yet*"; the second is "you cannot aim there
+*ever*, from this ball state". The wedge has since been swept against the
+engine at six ball speeds and promoted into [DOMAIN.md § The reachable
+wedge](DOMAIN.md#the-reachable-wedge-measured) — including a third regime at
+`|v| = kickStrength` that the original two-case derivation missed.
 
 **10. Cheap availability metrics**
 
@@ -654,26 +753,28 @@ value. Read honestly:
   real collision geometry. Take the same opportunity elsewhere when it appears
   — the ordering below is a default, not a queue to be respected.
 
-A reasonable re-ordering, if speed to something valuable matters more than
-tidiness: **5 → 6 → 8 → 7 → 9 → 12 → 14**, with 3, 4 and 11 pulled in the
-moment a measurement says they are needed, and 10 slotted in if an early win is
-wanted.
+- **The cue line (`feat/aim-assist`) jumped the queue, and that was right.** It
+  needed no primitive that did not already exist, it is exact rather than
+  approximate, and it is the first feature aimed at a *skill* rather than a
+  tactical read. It sat outside the numbered list because the list is
+  organised around enumeration and this is not an enumeration feature —
+  which is worth remembering as a pattern, not treated as an exception.
+- **`feat/reachable-zone` (item 5) is now the bottleneck.** It is written,
+  validated at 100%, still unported, and four separate things wait on it.
+  Nothing else on the list has that profile.
+
+These are judgments about the items themselves, and they stay here. **What to
+actually build next, and in what order, is in
+[PROGRESS.md](PROGRESS.md#what-to-do-next)** — it changes every branch, and
+this list does not.
 
 ---
 
 ## Open questions
 
-- Separate process or in-app Web Worker for the analytics boundary.
-- Whether replay/review is a first-class target alongside live play, or only a
-  development harness. This gates how much the tool can show and whether it is
-  shareable.
-- Whether cues should be suppressed outside `GamePlayState.Playing`, or shown
-  in `BeforeKickOff` too — setup positioning is arguably the most coachable
-  moment.
-- Hysteresis thresholds and minimum dwell time for topological events.
-- Whether "defensive line" is meaningful below 4v4, or degenerates.
-- Whether the angular interval set stays a one-off, or becomes a third
-  first-class shape.
+**See [PROGRESS.md](PROGRESS.md#open-decisions).** Kept with the rest of the
+mutable state rather than here, so a decision gets recorded in one place when
+it is finally made.
 
 ---
 
