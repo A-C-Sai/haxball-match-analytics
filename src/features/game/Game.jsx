@@ -30,6 +30,7 @@ import SoundButton from "./components/SoundButton.jsx";
 import useHaxballAnalytics from "../analytics/useHaxballAnalytics.js";
 import { estimateModerateSpeedThreshold, estimateBallSpeedThreshold, getMomentumDirections, getBallMomentumDirection, drawMomentumArrows } from "../analytics/momentumOverlay.js";
 import { computeBallTrace, drawBallTrace } from "../analytics/ballTrajectoryOverlay.js";
+import { computeAimAssist, drawAimAssist } from "../analytics/aimAssistOverlay.js";
 
 function Sound(volume) {
   this.audio = new (window.AudioContext || window.webkitAudioContext)();
@@ -60,6 +61,30 @@ export default function Game({ roomRef, usingCustomAPI }) {
   // and it is declared here (above the hook) so the onTick closure does not
   // reference a binding declared further down the component.
   const traceRef = useRef(null);
+  // Latest aim-assist cue line, same rate split as the trace above: computed
+  // once per tick, drawn every frame.
+  const aimRef = useRef(null);
+
+  // Shared overlay settings — every overlay feature (momentum now,
+  // LOS/passing-lanes/etc. later) reads from this same
+  // { enabled, team, features: { [featureKey]: boolean } } shape rather
+  // than inventing its own toggle. `enabled` is the master authority,
+  // deliberately decoupled from `features` — it's an independent AND-gate
+  // on top of whatever the per-feature checkboxes say, not derived from or
+  // merged into them (see OverlayControls.jsx for the full rationale).
+  // `features` lets any combination of overlays be on/off independently
+  // (see OverlayControls.OVERLAY_FEATURES for the registry). Session-only
+  // by design, no persistence. `team` is "both" | 1 (red) | 2 (blue),
+  // shared across all features.
+  const [overlaySettings, setOverlaySettings] = useState({ enabled: true, team: "both", features: { momentum: true, trajectory: true, aimAssist: true, aimAssistLeadIn: true } });
+  // onRequestAnimationFrame below is captured once when the renderer is
+  // constructed (inside initRenderer), not re-created on every React
+  // render — so it would otherwise close over a STALE overlaySettings value.
+  // Mirror the latest value into a ref that closure can always read fresh.
+  const overlaySettingsRef = useRef(overlaySettings);
+  useEffect(() => {
+    overlaySettingsRef.current = overlaySettings;
+  }, [overlaySettings]);
   // `logging: false` — session capture is done (feat/session-event-capture).
   // Flip it back to true only for a deliberate recording run; playing should
   // not write an NDJSON file every game.
@@ -74,6 +99,21 @@ export default function Game({ roomRef, usingCustomAPI }) {
       // Horizon defaults are distance-based (see computeBallTrace); a tick
       // count is the wrong unit once damping is in play.
       traceRef.current = computeBallTrace(room.state, geometry, room.stadium);
+
+      // The cue line: where the ball would go if the kicker kicked THIS tick.
+      // Reads `frame` rather than room.state — extractFrame has already
+      // normalized every disc, so there is no second convention to keep in
+      // sync. Returns null whenever there is nothing honest to draw (nobody
+      // in kick range being the common case).
+      // Gated on the feature being on: with it off there is nothing to draw,
+      // and this runs a full path simulation every tick.
+      const settings = overlaySettingsRef.current;
+      // The lead-in band is ALWAYS computed — the ball halo needs it whether
+      // or not the path preview is shown on approach. The toggle is applied
+      // at draw time instead.
+      aimRef.current = settings.features.aimAssist
+        ? computeAimAssist(frame, geometry, room.stadium, room.currentPlayerId, { team: settings.team })
+        : null;
     },
   });
   const { player, setPlayerField } = usePlayerData();
@@ -91,26 +131,6 @@ export default function Game({ roomRef, usingCustomAPI }) {
   const [isRecording, setIsRecording] = useState(false);
   const canvasRef = useRef(null);
   const momentumCanvasRef = useRef(null);
-  // Shared overlay settings — every overlay feature (momentum now,
-  // LOS/passing-lanes/etc. later) reads from this same
-  // { enabled, team, features: { [featureKey]: boolean } } shape rather
-  // than inventing its own toggle. `enabled` is the master authority,
-  // deliberately decoupled from `features` — it's an independent AND-gate
-  // on top of whatever the per-feature checkboxes say, not derived from or
-  // merged into them (see OverlayControls.jsx for the full rationale).
-  // `features` lets any combination of overlays be on/off independently
-  // (see OverlayControls.OVERLAY_FEATURES for the registry). Session-only
-  // by design, no persistence. `team` is "both" | 1 (red) | 2 (blue),
-  // shared across all features.
-  const [overlaySettings, setOverlaySettings] = useState({ enabled: true, team: "both", features: { momentum: true, trajectory: true } });
-  // onRequestAnimationFrame below is captured once when the renderer is
-  // constructed (inside initRenderer), not re-created on every React
-  // render — so it would otherwise close over a STALE overlaySettings value.
-  // Mirror the latest value into a ref that closure can always read fresh.
-  const overlaySettingsRef = useRef(overlaySettings);
-  useEffect(() => {
-    overlaySettingsRef.current = overlaySettings;
-  }, [overlaySettings]);
   const chatInput = useRef(null);
   const soundInstanceRef = useRef(null);
   const soundRef = useRef(null);
@@ -495,6 +515,14 @@ export default function Game({ roomRef, usingCustomAPI }) {
             // corridor rather than under it.
             if (overlaySettingsNow.features.trajectory && traceRef.current) {
               drawBallTrace(ctx, traceRef.current, transform);
+            }
+
+            // Aim assist after the ball path so the counterfactual cue reads
+            // on top of the actual corridor rather than under it.
+            if (overlaySettingsNow.features.aimAssist && aimRef.current) {
+              drawAimAssist(ctx, aimRef.current, transform, {
+                showLineOutOfRange: !!overlaySettingsNow.features.aimAssistLeadIn,
+              });
             }
 
             if (overlaySettingsNow.features.momentum) {

@@ -256,28 +256,3 @@ populated — without it the hook runs once against a null room and never again.
 
 Scrubbing is safe (seeks are suppressed), but a clean straight-through play
 makes validator output easier to read.
-
----
-
-## Next
-
-Roadmap items 1 and 2 are done.
-
-**[`feat/ball-trajectory`](README-ball-trajectory.md)** is complete — a live
-overlay of where the ball is going, drawn at the ball's true width. It built
-directly on this branch: the geometry extraction added here (stadium `discs`
-and `joints`, plus the mask handling) is exactly what a trajectory needs to
-bounce off the right surfaces, and it applied the same standard of proof — a
-predictor plus a validator that can fail, run against the engine.
-
-That branch also turned up an eighth pitfall, in the same shape as the ones
-found here: collision **resolution order** changes the answer, and the error
-was invisible until goal posts were present in the test.
-
-Next is `feat/aim-assist`, which reuses that branch's predictor to show what a
-kick *would* do rather than what the ball is already doing.
-
-After that, the reachable-zone formula validated here feeds roadmap item 5
-(zone primitive in the live path) and then item 6, commitment. See the [main
-README](README.md#roadmap) — the closing subsection there argues for that
-route ahead of the analytics-boundary work listed as items 3 and 4.
