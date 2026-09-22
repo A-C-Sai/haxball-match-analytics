@@ -163,17 +163,29 @@ function pointSegmentDistance(px, py, ax, ay, bx, by) {
  * segment blocks players only if its cMask accepts one of those.
  */
 /**
- * A cMask of 0 means UNSPECIFIED, which in Haxball's stadium format means
- * "all" — not "nothing". Determined empirically: "K Futsal Huge 6v" carries
- * segments at x = +/-420 with cMask 0, and players are observed stopping dead
- * at x = +/-405, exactly one player radius short of them.
+ * A cMask of 0 means COLLIDES WITH NOTHING. It is not "unspecified".
  *
- * Reading 0 as "collides with nothing" inverts the most permissive boundaries
- * on a map into invisible ones, which is the worst possible direction for the
- * error: geometry that stops things silently disappears from the model.
+ * This reverses what this file used to say, so the evidence matters. The
+ * engine's physics step guards every collision with the raw, unnormalised
+ * expression `boundary.cMask & disc.cGroup && boundary.cGroup & disc.cMask`,
+ * in which zero is simply falsy. Most custom maps define `traits.line` as
+ * `{"cMask": []}`, that empty array parses to 0, and the trait merge pushes it
+ * onto every decorative element that did not set a mask of its own.
+ *
+ * The claim it replaces was that "K Futsal Huge 6v" carries segments at
+ * x = +/-420 with cMask 0 and that players stop dead at x = +/-405, one radius
+ * short. Run on that map (scripts/probe-inert-line.mjs), a player coasts
+ * straight through x = 420 and only stops when damping runs it out of
+ * momentum. Nothing on that map blocks players anywhere near x = 405: the only
+ * player-blocking geometry is the kick-off barriers at x = 0, the goal nets
+ * and posts, and the planes at x = +/-900 and y = +/-404.
+ *
+ * The observation may still have been real — what caused it was never
+ * identified, and this file's own note about omitted planes is one candidate.
+ * The mechanism attributed to it was not.
  */
-const CMASK_ALL = 63;
-const effectiveMask = (m) => (m === 0 || m == null ? CMASK_ALL : m);
+const CMASK_DEFAULT = 63;
+const effectiveMask = (m) => (m == null ? CMASK_DEFAULT : m);
 
 const TEAM_BITS = 2 | 4;
 
@@ -250,6 +262,34 @@ const noteCollision = (frameNo, playerId) => {
   set.add(playerId);
 };
 
+/**
+ * Frames where a room script moved a player directly.
+ *
+ * Room scripts enforce rules the stadium cannot express — a cap on how many
+ * defenders may enter the goal area, say — by writing a player's position and
+ * velocity outright, every couple of ticks, for as long as the player leans on
+ * the limit. Recorded shape, from a real 6v6:
+ *
+ *   data1 = [-405, null, 0, null, ...]   x := -405, xspeed := 0, rest unchanged
+ *   data2 = [null, null, null]           no mask change at all
+ *
+ * The zone bounds SELF-PROPELLED motion. A clamp is not motion; it is the
+ * negation of motion by an authority outside the physics. Counting these as
+ * failures measures the script, not the formula, so they get their own bucket:
+ * reported, because how often a script intervenes is worth knowing, but not
+ * decisive.
+ *
+ * `discType` is truthy for a player and falsy for a stadium disc.
+ */
+const clampsByFrame = new Map();
+
+const noteClamp = (frameNo, playerId) => {
+  if (frameNo == null || playerId == null) return;
+  let set = clampsByFrame.get(frameNo);
+  if (!set) clampsByFrame.set(frameNo, (set = new Set()));
+  set.add(playerId);
+};
+
 const text = fs.readFileSync(filePath, "utf8");
 for (const line of text.split("\n")) {
   if (!line.trim()) continue;
@@ -270,6 +310,8 @@ for (const line of text.split("\n")) {
       noteCollision(record.frameNo, record.discPlayerId);
       noteCollision(record.frameNo, record.discPlayerId1);
       noteCollision(record.frameNo, record.discPlayerId2);
+    } else if (record.event === "setDiscProperties") {
+      if (record.discType) noteClamp(record.frameNo, record.id);
     } else {
       discreteEvents.push(record);
     }
@@ -327,6 +369,13 @@ function collidedDuring(playerId, from, to) {
   return false;
 }
 
+function clampedDuring(playerId, from, to) {
+  for (let f = from; f <= to; f++) {
+    if (clampsByFrame.get(f)?.has(playerId)) return true;
+  }
+  return false;
+}
+
 if (geometryByVersion.size === 0) {
   console.error("No geometry records found. Is this a session file?");
   process.exit(1);
@@ -338,6 +387,7 @@ const stats = {
   open: { total: 0, inside: 0, maxOvershoot: 0, sumUsage: 0 },
   nearWall: { total: 0, inside: 0, maxOvershoot: 0, sumUsage: 0 },
   contact: { total: 0, inside: 0, maxOvershoot: 0, sumUsage: 0 },
+  clamped: { total: 0, inside: 0, maxOvershoot: 0, sumUsage: 0 },
   skippedNoPhysics: 0,
   skippedStateNotPlaying: 0,
   skippedDeadRange: 0,
@@ -430,8 +480,14 @@ for (const [version, byNo] of framesByVersion) {
       //
       // Engine events are reliable for disc-vs-disc, but a player resting
       // against a wall produces no sustained stream of them — the callback
-      // fires on impact, not every tick of contact. Observed directly: the
-      // segments at x = +/-420 stop players dead with no event recorded.
+      // fires on impact, not every tick of contact.
+      //
+      // This comment used to cite "the segments at x = +/-420 stop players
+      // dead with no event recorded" as the evidence. They do not: those
+      // segments are inert (cMask 0), and what stopped the players was a room
+      // script writing their position. The geometric check below is still
+      // needed for real sustained contact; it was just being credited with
+      // catching something it never caught.
       //
       // So geometry is checked too: if the player is touching or penetrating
       // a player-blocking boundary at ANY tick in the window, the engine will
@@ -465,7 +521,13 @@ for (const [version, byNo] of framesByVersion) {
       };
 
       let bucket;
-      if (collidedDuring(p.id, frameNo, frameNo + N) || inGeometricContact()) {
+      // Checked FIRST, and before contact, because it is the more specific
+      // claim: a clamp is an external authority writing the position, which no
+      // velocity model can be expected to anticipate. Folding it into contact
+      // would hide how often the script acts — which is the interesting part.
+      if (clampedDuring(p.id, frameNo, frameNo + N)) {
+        bucket = stats.clamped;
+      } else if (collidedDuring(p.id, frameNo, frameNo + N) || inGeometricContact()) {
         bucket = stats.contact;
       } else {
         const clearance = nearestBoundaryDistance(p.pos, segments, planes, discs);
@@ -477,7 +539,7 @@ for (const [version, byNo] of framesByVersion) {
       if (overshoot <= 1 + 1e-9) bucket.inside++;
       if (overshoot > bucket.maxOvershoot) bucket.maxOvershoot = overshoot;
 
-      if (bucket !== stats.contact) {
+      if (bucket !== stats.contact && bucket !== stats.clamped) {
         if (!stats.worst || overshoot > stats.worst.overshoot) {
           stats.worst = { overshoot, frameNo, playerId: p.id, name: p.name, isKicking: p.isKicking };
         }
@@ -529,6 +591,7 @@ for (const [label, s, note] of [
   ["Open space", stats.open, "want ~100%"],
   ["Near a wall", stats.nearWall, "want ~100%"],
   ["After contact", stats.contact, "informational — not a pass condition"],
+  ["Script-clamped", stats.clamped, "informational — the script moved them"],
 ]) {
   console.log(`\n${label}`);
   console.log(`  samples:      ${s.total}`);
@@ -543,6 +606,26 @@ console.log(
     `a collision injects momentum from outside the model — so those windows\n` +
     `are measured but do not decide the verdict.`
 );
+
+if (stats.clamped.total) {
+  const clampedPlayers = new Set();
+  for (const set of clampsByFrame.values()) for (const id of set) clampedPlayers.add(id);
+  console.log(
+    `\nThe script-clamped bucket holds windows where a room script wrote the\n` +
+      `player's position or velocity directly (a setDiscProperties event), which\n` +
+      `is how rules the stadium cannot express get enforced — a cap on defenders\n` +
+      `in the goal area, for instance. That is not motion the zone could bound,\n` +
+      `so it is reported rather than judged.\n` +
+      `  ${clampsByFrame.size} clamped frames across ${clampedPlayers.size} player(s).`
+  );
+} else {
+  console.log(
+    `\nNo setDiscProperties events in this session. Either no script intervened,\n` +
+      `or it was recorded before that event was captured — in which case a clamp\n` +
+      `is indistinguishable from a failure of the formula, and any window where a\n` +
+      `player stops dead with nothing there is unexplained rather than explained.`
+  );
+}
 
 if (stats.worst) {
   const w = stats.worst;

@@ -460,7 +460,11 @@ let blockerPass = true;
   // what is left: from 500 units out it returns only as far as x = 237 and the
   // check passes for the wrong reason. Near wall, fast arrival, long return.
   const livelyGeom = {
-    planes: [{ normal: { x: -1, y: 0 }, dist: -100, bCoef: 1, cMask: 0, cGroup: 32 }],
+    planes: [{ normal: { x: -1, y: 0 }, dist: -100, bCoef: 1, cMask: 63, cGroup: 32 }],
+    // cMask 63 ('all'), not 0. This fixture said 0 and passed, because the
+    // collision set used to read 0 as 'all'. Under the engine's actual rule a
+    // zero mask collides with NOTHING, so the wall vanished and the ball flew
+    // through it — the check failed on the strength of its own scenery.
     segments: [], vertices: [], discs: [],
   };
   const livelySet = buildCollisionSet(livelyGeom, ballSpec);
@@ -484,7 +488,11 @@ let blockerPass = true;
   // distance-based latch never re-arms and the cue draws straight through
   // them. Only a direction-based release catches this.
   const pressWall = {
-    planes: [{ normal: { x: -1, y: 0 }, dist: -100, bCoef: 1, cMask: 0, cGroup: 32 }],
+    planes: [{ normal: { x: -1, y: 0 }, dist: -100, bCoef: 1, cMask: 63, cGroup: 32 }],
+    // cMask 63 ('all'), not 0. This fixture said 0 and passed, because the
+    // collision set used to read 0 as 'all'. Under the engine's actual rule a
+    // zero mask collides with NOTHING, so the wall vanished and the ball flew
+    // through it — the check failed on the strength of its own scenery.
     segments: [], vertices: [], discs: [],
   };
   const pressSet = buildCollisionSet(pressWall, ballSpec);

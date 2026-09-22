@@ -32,6 +32,15 @@ is [PROGRESS.md](PROGRESS.md)'s job, and keeping it in one place is why it can
 be trusted. A "Next" section in five files is five things to go stale, and
 three of them had.
 
+**The one thing that does get written back: a correction.** "Permanent" means
+no status updates, not preserved errors. A branch README that states something
+now known to be false gets a marked correction block — original text left
+standing, the correction above it, dated to the branch that found it. The
+record of what was believed is worth keeping; so is not re-teaching it.
+Three carry one now, all from `fix/custom-map-geometry`, because a trap list
+and a validated number are read as settled fact by whoever picks the branch up
+next — which is exactly how a wrong `cMask` rule survived four branches.
+
 **Read [DOMAIN.md](DOMAIN.md) before writing any analytics.** Several
 plausible feature ideas die on that page, and every pitfall listed there cost
 real debugging time to find.
@@ -105,6 +114,20 @@ npm run dev
 ```
 
 Opens the NW.js desktop app (not a browser). F12 for the devtools console.
+
+### `test-maps/` — keep it populated
+
+`scripts/validate-trajectory.mjs` validates against the default stadium plus
+**every `.hbs` in `test-maps/`**. Drop a map in and it is covered from then on.
+
+This matters more than it sounds. The default stadiums carry almost no
+decorative geometry and no one-way walls, so a predictor can be wrong by
+hundreds of units on a real map while reporting floating-point agreement on
+Classic — which is exactly what happened for four branches. If the directory
+is empty the validator still prints `ALL PASS`, having tested one stadium, so
+**an empty `test-maps/` is a green run that proves almost nothing.**
+
+Custom maps are not in git. Copy in whatever you actually play on.
 
 ---
 
@@ -571,7 +594,13 @@ there first", "is this player committed", "whose territory is this" are all the
 same question asked with different N. Porting it is mostly moving code.
 *Status:* validated at 100% against a full recorded 6v6 with the bound tight
 (see [README-session-event-capture.md](README-session-event-capture.md)) and
-**still not in the live path.** It is the only unported primitive that other
+**still not in the live path.** Re-validated after `fix/custom-map-geometry`
+at 100.00% over 151,672 open-space samples — the earlier 100% had been reached
+partly by a wrong mask rule filing the failing windows under contact, so the
+figure survived but its derivation did not. One thing the port must handle
+that the formula does not: a room script can write a player's position
+outright, so the zone is *sound* but loose wherever a script is policing an
+area (DOMAIN.md pitfall 2). It is the only unported primitive that other
 branches are already waiting on — `feat/interception` cannot start without it,
 items 6, 12 and 17 all reduce to it, and it is the first thing on the list that
 puts something on screen the eye cannot supply. It is a port, not a

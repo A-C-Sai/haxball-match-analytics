@@ -40,6 +40,12 @@ export function extractStadiumGeometry(room) {
     v0: { x: seg.v0.pos.x, y: seg.v0.pos.y },
     v1: { x: seg.v1.pos.x, y: seg.v1.pos.y },
     bCoef: seg.bCoef,
+    // A non-zero bias makes the segment ONE-SIDED, and its sign is relative to
+    // the segment's own normal (v1-v0) rotated to (uy, -ux). Custom maps lean
+    // on this heavily — half the ball-colliding segments on the K Futsal maps
+    // carry a bias of +/-30 or +/-40 — so dropping it turns a one-way wall into
+    // a solid one and the ball is predicted to bounce off thin air.
+    bias: seg.bias,
     vis: seg.vis,
     curveF: seg.curveF,
     normal: seg.normal ? { x: seg.normal.x, y: seg.normal.y } : null,
@@ -176,6 +182,14 @@ export function extractFrame(room, opts = {}) {
       vel: normalized?.vel ?? null,
       radius: normalized?.radius ?? null,
       bCoef: normalized?.bCoef ?? null,
+      // Per-frame, because a room script can change them mid-game and a
+      // player's collision state is then NOT a property of the stadium.
+      // Capturing the setDiscProperties event says when it changed; capturing
+      // the value here says what it is, which is what an offline reader
+      // actually needs — a session that begins mid-game has no earlier events
+      // to replay, and that case is explicitly supported elsewhere.
+      cMask: normalized?.cMask ?? null,
+      cGroup: normalized?.cGroup ?? null,
     };
   });
 

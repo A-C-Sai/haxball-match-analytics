@@ -289,6 +289,16 @@ not by which feature they arrived with.**
 | 4. Reachable | every drawn element can actually fire | stop marker, bounces, both wedge branches, both `inRange` branches |
 | 5. Blockers | a body truncates the path, and in time | truncates at tick 21, engine diverges at tick 21 |
 
+> **EXCLUSION (added by `fix/custom-map-geometry`).** All five checks run on
+> the **default Classic stadium**. They say nothing about custom maps, where
+> the shared predictor was wrong until that branch. Check 1's p99 is now
+> 2.27e-13 after the fix.
+>
+> Checks 4 and 5 also used two synthetic walls declared `cMask: 0`, written by
+> an author who believed that meant "all". They passed because the code under
+> test shared the misconception with its own scenery — a fixture is a claim
+> too, and these ones asserted the bug.
+
 **Check 4 is the one `feat/ball-trajectory` did not have.** There the physics
 validator passed at 1e-13 while the overlay shipped a stop marker whose draw
 condition could never be true — the validated part and the shipped part had
@@ -365,7 +375,12 @@ tick closure never references a binding declared further down.
 - **Collision resolution order** — discs before planes and segments
   ([pitfall 8](DOMAIN.md#8-collision-resolution-order-changes-the-answer)).
   Already correct in `ballTrajectory.js`; do not re-derive it.
-- **`cMask = 0` means "all", not "none"** — pitfall 2.
+- **`cMask = 0` means "collides with NOTHING"** — pitfall 2. This bullet said
+  the opposite, which is how the error travelled: a trap list is read as
+  settled fact by whoever picks the branch up. Corrected in
+  `fix/custom-map-geometry` against the engine's own source. Decorative
+  `trait: "line"` geometry carries a zero mask and the engine ignores all of
+  it; reading it as "all" turns the goal box into a wall.
 - **Replay seeks** re-fire events and run `frameNo` backwards. The `onTick`
   seam suppresses them; anything stateful added here inherits the problem if
   it bypasses the seam ([pitfall

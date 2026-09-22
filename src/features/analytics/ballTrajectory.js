@@ -121,15 +121,47 @@
  */
 
 /**
+ * The stadium format's default cMask, which is what "all" parses to: 63,
+ * i.e. ball|red|blue|redKO|blueKO|wall. Not 0xffffffff — the four custom
+ * groups c0..c3 are deliberately outside it.
+ */
+const CMASK_DEFAULT = 63;
+
+/**
  * Surfaces the given entity can actually collide with.
  *
- * cMask = 0 means "unspecified -> all", NOT "none". Reading it as "none" makes
- * the most permissive geometry on a map invisible. See DOMAIN.md § Pitfalls.
+ * **cMask = 0 means "collides with nothing".** It is not "unspecified".
  *
- * @param {number} mask
+ * This is the engine's own rule, read out of node-haxball's physics step,
+ * where every collision — disc, plane, segment, vertex alike — is guarded by
+ * the same raw expression with no normalisation of any kind:
+ *
+ *     boundary.cMask & disc.cGroup  &&  boundary.cGroup & disc.cMask
+ *
+ * Zero is falsy, so a zero mask collides with nothing, full stop.
+ *
+ * Where a 0 comes from matters, because it is almost never written directly on
+ * the element. `traits.line` is `{"cMask": []}` on most custom maps, the trait
+ * merge fills in any field the element left absent, and the empty array parses
+ * to 0. So every decorative line on the map — kick-off circle, penalty box,
+ * corner arc, halfway line — arrives here as a real geometry object with a
+ * zero mask, and the engine ignores all of them.
+ *
+ * Reading 0 as "all" therefore inverts the most permissive elements on a map
+ * into the most obstructive, and does it at exactly the density a map author
+ * draws decoration: 30 of 61 segments on K Futsal Huge, 36 of 57 on K Futsal
+ * big. The ball was predicted to bounce off the goal box.
+ *
+ * A genuinely ABSENT mask is a different case and keeps the permissive
+ * reading: it means the field never reached us (hand-built geometry, or a
+ * session log written before the field was captured), not that the map author
+ * asked for nothing. node-haxball always populates it as a number, so in
+ * practice this only fires for geometry built outside the engine.
+ *
+ * @param {number|null|undefined} mask
  * @returns {number}
  */
-const effectiveMask = (mask) => (mask === 0 || mask == null ? 0xffffffff : mask);
+const effectiveMask = (mask) => (mask == null ? CMASK_DEFAULT : mask);
 
 /**
  * @param {number} aMask @param {number} aGroup
@@ -160,7 +192,18 @@ export function buildCollisionSet(geometry, entity) {
     const a = { x: s.v0.x, y: s.v0.y };
     const b = { x: s.v1.x, y: s.v1.y };
     const cf = s.curveF;
-    const o = { a, b, bCoef: s.bCoef, curved: Number.isFinite(cf) && cf !== 0 };
+    // bias makes a segment ONE-SIDED. See resolveCollisions for what it does;
+    // absent means 0, which is the two-sided case.
+    const o = { a, b, bCoef: s.bCoef, bias: s.bias ?? 0, curved: Number.isFinite(cf) && cf !== 0 };
+    if (!o.curved) {
+      // The engine's own normal for a straight segment, sign included:
+      //   d = v0 - v1;  n = (-d.y, d.x)/|d|  =  (u.y, -u.x)/|u|  for u = v1 - v0.
+      // The sign is load-bearing once bias is non-zero, because bias is
+      // measured along this normal and picks which side the wall exists on.
+      const ux = b.x - a.x, uy = b.y - a.y;
+      const ul = Math.hypot(ux, uy);
+      o.n = ul === 0 ? { x: 0, y: 0 } : { x: uy / ul, y: -ux / ul };
+    }
     if (o.curved) {
       // Arc centre/radius, derived exactly as the engine derives them.
       const hx = 0.5 * (b.x - a.x), hy = 0.5 * (b.y - a.y);
@@ -237,33 +280,55 @@ export function resolveCollisions(p, v, radius, bCoef, set) {
   }
 
   for (const s of set.segments) {
-    let nx, ny, dist;
+    // `h` is the SIGNED distance from the segment along `n`, not a magnitude.
+    // Keeping the sign is the whole point: bias is measured along that normal.
+    let nx, ny, h;
     if (s.curved) {
       const dx = p.x - s.c.x, dy = p.y - s.c.y;
       if (dx * s.n0.x + dy * s.n0.y <= 0) continue;   // outside the arc's span
       if (dx * s.n1.x + dy * s.n1.y <= 0) continue;
       const dl = Math.hypot(dx, dy);
       if (dl === 0) continue;
-      const gap = dl - s.r;                            // signed: outside is positive
-      dist = Math.abs(gap);
-      if (dist >= radius) continue;
-      const sgn = gap >= 0 ? 1 : -1;
-      nx = (dx / dl) * sgn;
-      ny = (dy / dl) * sgn;
+      h = dl - s.r;                                    // outside the arc is positive
+      nx = dx / dl;
+      ny = dy / dl;
     } else {
-      const abx = s.b.x - s.a.x, aby = s.b.y - s.a.y;
-      const denom = abx * abx + aby * aby;
-      if (denom === 0) continue;
-      const t = ((p.x - s.a.x) * abx + (p.y - s.a.y) * aby) / denom;
-      if (t < 0 || t > 1) continue;                    // the ends are the vertices' job
-      const cx = s.a.x + abx * t, cy = s.a.y + aby * t;
-      const dx = p.x - cx, dy = p.y - cy;
-      dist = Math.hypot(dx, dy);
-      if (dist >= radius || dist === 0) continue;
-      nx = dx / dist;
-      ny = dy / dist;
+      const ux = s.b.x - s.a.x, uy = s.b.y - s.a.y;
+      if (ux === 0 && uy === 0) continue;
+      // The engine rejects on the projections themselves, and rejects the
+      // endpoints too (<= 0 and >= 0, not < 0 and > 1). The ends belong to
+      // the vertices, which are their own collision objects.
+      if ((p.x - s.a.x) * ux + (p.y - s.a.y) * uy <= 0) continue;
+      const fx = p.x - s.b.x, fy = p.y - s.b.y;
+      if (fx * ux + fy * uy >= 0) continue;
+      nx = s.n.x;
+      ny = s.n.y;
+      h = nx * fx + ny * fy;
     }
-    resolveContact(p, v, nx, ny, radius - dist, bCoef * s.bCoef);
+
+    // Bias. The engine:
+    //
+    //   bias == 0  ->  two-sided: if the disc is behind the surface, flip the
+    //                  normal so it faces the disc and use |h|.
+    //   bias != 0  ->  ONE-SIDED. A negative bias flips the normal once (which
+    //                  is what chooses the side), then the wall rejects any
+    //                  disc deeper than |bias| behind it. The normal is NOT
+    //                  re-oriented per disc, so a disc within that band is
+    //                  pushed FORWARD along the normal rather than back the
+    //                  way it came.
+    //
+    // This is what makes a one-way wall one-way, and it is why these maps hold
+    // the ball in while letting it be played out from behind.
+    let bias = s.bias;
+    if (bias === 0) {
+      if (h < 0) { h = -h; nx = -nx; ny = -ny; }
+    } else {
+      if (bias < 0) { bias = -bias; h = -h; nx = -nx; ny = -ny; }
+      if (h < -bias) continue;
+    }
+
+    if (h >= radius) continue;
+    resolveContact(p, v, nx, ny, radius - h, bCoef * s.bCoef);
   }
 
   for (const w of set.vertices) {
