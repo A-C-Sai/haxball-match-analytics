@@ -126,7 +126,7 @@ each needed a recorded match and a check that could fail.
 | 2 | Bound used current, not reachable, physics | 84% of failures clustered at the 1.33 ratio |
 | 3 | Walls assumed to constrain all entities | Players observed passing through boundaries |
 | 4 | Stadium discs never extracted | Geometry listing having no candidate |
-| 5 | `cMask = 0` read as "none" not "all" | Dumping geometry regardless of mask |
+| 5 | ~~`cMask = 0` read as "none" not "all"~~ **— NOT A BUG. See the correction below.** | Dumping geometry regardless of mask |
 | 6 | Goal-to-reset window not excluded | State gate assuming events and state agree |
 | 7 | Sustained contact emits no events | Nearest-player gaps sitting at exactly 30.00 |
 
@@ -139,6 +139,41 @@ Progress across those fixes:
 | Violations | 1,554 | **0** |
 
 ### The one that mattered most
+
+> **CORRECTION (`fix/custom-map-geometry`). #5 was not a bug, and the fix for
+> it was the bug.** This section is kept as written because how it was reached
+> matters more than the claim, and because the number it celebrates is the
+> evidence against it. Read
+> [DOMAIN.md pitfall 2](DOMAIN.md#2-cmask--0-means-collides-with-nothing)
+> before believing anything below.
+>
+> `cMask = 0` means **collides with nothing**. The engine's physics step
+> guards every collision with a raw `cMask & cGroup` test in which zero is
+> falsy; there is no "unspecified → all" anywhere in it. Reading it as "all"
+> turned every decorative `trait: "line"` element into a wall — 30 of 61
+> segments on K Futsal Huge — and the ball was predicted to bounce off the
+> goal box on every custom map for four branches.
+>
+> **Why it looked like a fix.** Below, "max overshoot 20.33 → 1.0000". That
+> 20.33 is frame 7376, and it is still 20.3328 today — it never went anywhere.
+> Treating the inert segments at x = ±420 as walls moved that window into the
+> contact bucket, where overshoot is measured but not judged. The violation
+> was not resolved, it was relocated, and containment reached 100% because the
+> failing windows stopped being counted.
+>
+> What was actually happening at ±405: a room script writes the player's
+> position directly (`setDiscProperties`, `x := -405, xspeed := 0`) to cap how
+> many defenders enter the goal area. Not a collider, not a mask, not in the
+> stadium at all. Those windows now have their own bucket, and open-space
+> containment is **100.00% over 151,672 samples** on the same map — the same
+> number, honestly derived this time.
+>
+> **The lesson is not "check the mask rule".** It is that a metric which
+> improves because a fix reclassified the failing cases is indistinguishable,
+> from the metric alone, from one that improved because the failures stopped.
+> This file reported 1,554 → 0 violations and 15.59% → 100.00% containment,
+> and part of that was real and part of it was bookkeeping. Nothing here
+> recorded which was which.
 
 **#5.** `cMask = 0` means "unspecified → all", not "none". Reading it
 backwards made the *most permissive* boundaries on a map invisible — geometry

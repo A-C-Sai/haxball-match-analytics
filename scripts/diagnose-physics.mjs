@@ -47,17 +47,16 @@ const decodeFlags = (m) => {
 };
 
 /**
- * A cMask of 0 means UNSPECIFIED, which in Haxball's stadium format means
- * "all" — not "nothing". Determined empirically: "K Futsal Huge 6v" carries
- * segments at x = +/-420 with cMask 0, and players are observed stopping dead
- * at x = +/-405, exactly one player radius short of them.
+ * A cMask of 0 means COLLIDES WITH NOTHING. It is not "unspecified".
  *
- * Reading 0 as "collides with nothing" inverts the most permissive boundaries
- * on a map into invisible ones, which is the worst possible direction for the
- * error: geometry that stops things silently disappears from the model.
+ * See the note in scripts/validate-zone.mjs and DOMAIN.md pitfall 2 for the
+ * evidence, which reverses what this file used to say. Short version: the
+ * engine guards every collision with a raw `cMask & cGroup` test in which zero
+ * is falsy, and `traits.line` is `{"cMask": []}` on most custom maps, so every
+ * decorative line arrives here with a zero mask and is ignored by the engine.
  */
-const CMASK_ALL = 63;
-const effectiveMask = (m) => (m === 0 || m == null ? CMASK_ALL : m);
+const CMASK_DEFAULT = 63;
+const effectiveMask = (m) => (m == null ? CMASK_DEFAULT : m);
 
 const TEAM_BITS = 2 | 4; // red | blue
 

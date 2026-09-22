@@ -220,6 +220,31 @@ export default function useHaxballAnalytics(roomRef, opts = {}) {
       chainRoomCallback(room, "onAfterGameStop", (byId) => onEvent("gameStop", { byId })),
       chainRoomCallback(room, "onAfterGameEnd", (winningTeamId) =>
         onEvent("gameEnd", { winningTeamId })
+      ),
+      // THE ONE EVENT THAT ANNOUNCES A RUNTIME COLLISION CHANGE.
+      //
+      // Room scripts reshape collision state mid-game. A common one: a limit
+      // on how many defenders may enter the goal area, enforced by blocking
+      // the Nth defender past a line — for that team only, and not for the
+      // ball. None of that is in the stadium. The map is authored with the
+      // line inert (`cMask: 0`); the barrier exists only as a live mutation.
+      //
+      // Without this event the phenomenon is invisible in the record. A
+      // player is simply seen to stop dead at a coordinate with no geometry
+      // that could stop them, and any explanation offered for it is a guess.
+      // That is exactly how DOMAIN.md pitfall 2 acquired a wrong mechanism
+      // and held it for four branches.
+      //
+      // `data1` is [x, y, xspeed, yspeed, xgravity, ygravity, radius, bCoef,
+      // invMass, damping] and `data2` is [color, cMask, cGroup], so this
+      // captures position clamps AND mask changes. `type` is 0 for a stadium
+      // disc and 1 for a player.
+      //
+      // Deliberately NOT gated behind `captureCollisions`: that flag exists to
+      // shed high-frequency noise, and this is the opposite — rare, and the
+      // only record that a force outside the physics model acted on a disc.
+      chainRoomCallback(room, "onAfterSetDiscProperties", (id, type, data1, data2) =>
+        onEvent("setDiscProperties", { id, discType: type, data1, data2 })
       )
     );
 

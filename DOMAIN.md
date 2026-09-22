@@ -603,7 +603,7 @@ stutter-stepping is the technique for aiming.
 
 | Kind | Notes |
 | --- | --- |
-| `segments` | Zero-width lines. May be curved (`curveF`, radians). |
+| `segments` | Zero-width lines. May be curved (`curveF`; `Infinity` when straight) and **one-sided** (`bias`). |
 | `planes` | Infinite half-spaces, `normal · p = dist`. Usually the pitch boundary. |
 | `discs` | **Static discs.** Goal posts, and on custom maps whole barriers. |
 | `vertices` | Point colliders at segment endpoints. |
@@ -634,6 +634,36 @@ say where the path stops being valid rather than inventing a rebound off a
 frozen position the player has already left. Where they *will* be needs intent
 ([pitfall 10](#10-intent-is-not-computable)); where they *could* be is the
 reachable zone.
+
+### Segments can be one-sided, and half of them are
+
+A segment's `bias` makes it **one-way**. It is not a tuning parameter and it is
+not optional: on the K Futsal maps, 12 of 25 ball-colliding segments carry
+`bias` ±30, and 4 of 13 carry ±40. Drop it and a one-way wall becomes a solid
+one — the ball is predicted to bounce off something it should sail through.
+
+The engine's rule, in order:
+
+| `bias` | Behaviour |
+| --- | --- |
+| `0` | Two-sided. The normal is flipped to face whichever side the disc is on. |
+| `> 0` | One-sided along the segment's own normal. Reject when the disc is deeper than `bias` behind the surface. |
+| `< 0` | Same, with the normal flipped once first — which is what selects the side. Then `|bias|` applies as above. |
+
+Two consequences worth holding on to:
+
+- The **sign is relative to the segment's own normal**, which the engine
+  derives from vertex order: for `u = v1 - v0`, the normal is `(u.y, -u.x)/|u|`.
+  Swapping `v0` and `v1` flips the normal, so the engine negates `bias` when it
+  swaps them. Vertex order is load-bearing data, not presentation.
+- Inside the band, the disc is pushed **forward** along the normal, not back
+  the way it came, because the normal is not re-oriented per disc. That is what
+  makes a one-way wall one-way: the ball is let in from behind and held in
+  from the front.
+
+`curveF` is `Infinity` for a straight segment, not 0. Test `isFinite`, which is
+what the engine tests; a `cf !== 0` test happens to agree but for the wrong
+reason, and a `cf != null` test does not agree at all.
 
 ### Everything has width
 
@@ -780,14 +810,127 @@ This matters for nearly every tactical concept: body blocking is *sustained*
 contact, absorbing is a *held* position, and possession by a player shielding
 the ball registers once then appears to end.
 
-### 2. `cMask = 0` means "unspecified → all", not "none"
+### 2. `cMask = 0` means "collides with nothing"
 
-**Verified.** A map carried segments at x = ±420 with `cMask = 0`, and players
-were observed stopping dead at x = ±405 — exactly one player radius short.
+**Verified against the engine's source, and this reverses what this entry used
+to say.** The previous version claimed 0 meant "unspecified → all", was marked
+Verified, and was wrong. It cost two overlays their accuracy on every custom
+map for four branches. The correction, the refutation and the lesson are all
+here because the shape of the mistake matters more than the fact.
 
-Reading 0 as "collides with nothing" inverts the **most permissive** boundaries
-on a map into invisible ones. That is the worst direction for the error:
-geometry that stops things silently disappears from the model.
+**The rule.** node-haxball's physics step guards every collision — disc, plane,
+segment and vertex alike — with the same raw expression:
+
+```
+boundary.cMask & disc.cGroup  &&  boundary.cGroup & disc.cMask
+```
+
+No normalisation of any kind, and zero is falsy. A zero mask collides with
+nothing, full stop.
+
+**Where the zeros come from.** Almost never from the element. `traits.line` is
+`{"cMask": []}` on most custom maps, the empty array parses to 0, and the trait
+merge (`K8` in api.js) fills in any field the element left absent. So every
+decorative line on a map — kick-off circle, penalty box, corner arc, halfway
+line, goal box — arrives as a real geometry object carrying a zero mask, and
+the engine ignores every one of them.
+
+That is why the error was so destructive: it fired at exactly the density a map
+author draws decoration at. On K Futsal Huge, 30 of 61 segments and 49 of 71
+vertices; on K Futsal big, 36 of 57 and 50 of 101. The ball was predicted to
+bounce off the goal box.
+
+**The refutation.** The claim rested on an observation: "K Futsal Huge 6v"
+carries segments at x = ±420 with `cMask = 0`, and players were seen stopping
+dead at x = ±405, one player radius short. Run on that same map
+(`scripts/probe-inert-line.mjs`), a player coasts straight through x = 420 and
+only stops when damping runs it out of momentum — 300 units from a speed-12
+shove, exactly `v/(1-0.96)`. Nothing in that stadium blocks players anywhere
+near x = 405: the only player-blocking geometry is the kick-off barriers at
+x = 0, the goal nets and posts, and the planes at x = ±900 and y = ±404.
+
+**And the observation was real anyway.** A recorded 6v6 on that map has
+players stopping at exactly ±405.00 with the along-axis velocity going to
+exactly 0, repeatedly, for several players, on both sides of the pitch. So
+the stadium does not stop them and something does.
+
+### The actual mechanism: a room script writes the position
+
+**There is no barrier. The script moves the player.** The case that produced
+this: a cap on how many defenders may enter the goal area, enforced against
+the Nth defender — for the defending team only, and not for the ball, which
+passes through freely. It is implemented by writing the player's position
+outright, every couple of ticks, for as long as they lean on the limit.
+Recorded shape, straight out of a real 6v6:
+
+```
+frameNo 7376, id 1594, discType player
+data1 = [-405, null, 0, null, ...]   x := -405, xspeed := 0, rest unchanged
+data2 = [null, null, null]           color, cMask, cGroup ALL unchanged
+```
+
+**No mask is modified and no collider exists.** That is worth stating plainly
+because "dynamic collision" is the natural way to describe the behaviour from
+the pitch, and it is not what the engine is doing. The line at x = ±420 is
+inert before, during and after. The tell in the frame data is that `vel.x`
+goes to exactly `0.00` while `vel.y` carries on undisturbed — a collision
+resolves along a contact normal and would disturb both.
+
+That is why it stops players in a real room and not in a sandbox loaded from
+the same `.hbs`: **the stadium file is not the whole story, and neither is the
+collision state.** A third party is writing state directly.
+
+Consequences that outlive this one bug:
+
+- **Player state can change with no physical cause.** Any model that assumes
+  position is the integral of velocity is wrong here, and wrong specifically
+  in the defensive third. The reachable zone stays *sound* — it is an upper
+  bound, and a clamp only removes reachable area — but it is loose exactly
+  where defending is decided.
+- **The ball and the players do not share a rule set**, and on these maps they
+  demonstrably do not. A restriction can apply to one team, to one player, and
+  not to the ball.
+- **A displacement larger than the velocity permits is the tell.** 6.17 units
+  in one tick at |v| = 2.39, against both the velocity and the input. Physics
+  cannot do that; a write can.
+- **`setDiscProperties` is not only a teleport.** Pitfall 6 files it under
+  position resets alongside goals and joins. It is also a live, repeating,
+  rule-enforcing mechanism that fires during ordinary play, and treating it
+  purely as a reset is why nobody went looking for it.
+
+**Both earlier explanations were wrong, and the second was mine.** First
+"`cMask = 0` means all", which is false. Then "nothing stops them there",
+which is true of the stadium and false of the room. The observation survived
+both. Each explanation was reached by looking only where the explainer was
+already looking — the map file — and the answer was never in the map file.
+
+A third guess nearly made it in: that the script flips masks at runtime. It
+does not — `data2` is untouched. Plausible, mechanical, and still wrong,
+because it was again reasoning about what the engine *could* do rather than
+reading what it *did*. The event log settled in one line what three rounds of
+inference had not.
+
+This is [pitfall 9](#9-a-false-negative-is-as-available-as-a-false-positive)
+and the play-knowledge lesson in the same breath: *the observation was kept
+and the mechanism was assumed*, twice. Every claim from playing the game has
+been correct so far, and every mechanism behind those claims has differed from
+the obvious reading — including from the obvious reading of the correction.
+
+**What makes it visible.** `setDiscProperties` is now captured as an event and
+player `cMask`/`cGroup` are recorded per frame. Before that, a runtime barrier
+left no trace at all: a player simply stopped at a coordinate with nothing
+there, and any account of it was a guess. Sessions recorded before this change
+cannot answer the question, so do not try to settle it from them.
+
+**A genuinely absent mask is a different case** and keeps the permissive
+reading: it means the field never reached the model, not that the author asked
+for nothing. The stadium format's own default is 63 (`all`), which is what
+node-haxball's class default is too — not `0xffffffff`, since the four custom
+groups c0..c3 sit outside it.
+
+Guard against writing the old belief into a fixture: two synthetic walls in
+`validate-aim-assist.mjs` were declared `cMask: 0` and passed only because the
+code under test shared the error.
 
 ### 3. Stadium discs are collision geometry
 

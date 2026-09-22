@@ -33,5 +33,3 @@ out
 *.sln
 *.sw?
 
-# Analytics session captures
-analytics-sessions

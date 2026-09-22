@@ -17,7 +17,7 @@ that can be predicted exactly. This branch predicts it and draws it.
 | --- | --- |
 | Reflection rule reverse-engineered | ~~Done — `e = bCoef₁ × bCoef₂`, verified~~ |
 | Trajectory predictor | ~~Done — `ballTrajectory.js`~~ |
-| Predictor validated against the engine | ~~Done — PASS, p99 2.4e-13~~ |
+| Predictor validated against the engine | ~~Done — PASS, p99 2.4e-13~~ **on Classic only; wrong by ~395u on custom maps until `fix/custom-map-geometry`** |
 | Curved segments + goal posts handled | ~~Done~~ |
 | Overlay draw layer | ~~Done — `ballTrajectoryOverlay.js`~~ |
 | Wired into `Game.jsx` and `ReplayView.jsx` | ~~Done — toggle "Ball path"~~ |
@@ -272,6 +272,22 @@ node scripts/validate-trajectory.mjs --trials 600 --ticks 140
 Current result: **PASS** — p99 error 2.4e-13, max 1.5e-12, over 70,994 tick
 comparisons including 663 ticks containing a bounce. That is floating-point
 noise; the model is the engine's arithmetic, not an approximation of it.
+
+> **EXCLUSION (added by `fix/custom-map-geometry`).** Every one of those 70,994
+> comparisons was run on the **default Classic stadium**, and that is the whole
+> of what the number covers. On custom maps this predictor was wrong by up to
+> **395 units** at the same moment it was reporting 2.4e-13 here — bouncing the
+> ball off decorative geometry (`cMask: 0` read as "all") and treating one-way
+> walls as solid (`bias` not modelled at all). Classic has almost no decorative
+> geometry and no biased segments, so it could not show either.
+>
+> The validator now runs every map in `test-maps/` as well. Current figures:
+> Classic p99 1.71e-13, K Futsal Huge 1.14e-13, K Futsal big 1.42e-13.
+>
+> This is the same failure this file warns about elsewhere — a validator's
+> exclusions are load-bearing claims about what it does not prove — arriving in
+> the file that first taught it. "Validated against the engine" meant
+> "validated against one stadium", and nothing said so.
 
 No new dependency — `node-haxball` is already in `package.json`.
 

@@ -5,7 +5,7 @@ either permanent (how the game works, how a branch was built) or a catalogue
 (what could be built). This file is the only one that goes stale on purpose,
 and the only one that needs updating when a branch lands.
 
-Last updated: after `fix/players-block-predictions`.
+Last updated: after `fix/custom-map-geometry`.
 
 ---
 
@@ -22,11 +22,19 @@ features.
 | [`feat/ball-trajectory`](README-ball-trajectory.md) | **Complete** | tick-exact ball predictor (p99 2.4e-13), live overlay at true ball width, most of the raycast primitive |
 | [`feat/aim-assist`](README-aim-assist.md) | **Complete** | the cue line (p99 2.93e-13), a validator that tests display logic too, the reachable wedge |
 | `fix/players-block-predictions` | **Complete** | both overlays stop drawing through bodies; `predictBallPath` takes per-tick blockers |
+| `fix/custom-map-geometry` | **Complete** | both overlays are correct on custom maps; the validator runs on real maps; `cMask` and `bias` now match the engine |
 
-That last one is a fix off `main`, not a feature branch: it touches
-`ballTrajectory.js` and `aimAssistOverlay.js`, so it belongs to neither of the
+Those last two are fixes off `main`, not feature branches: they touch
+`ballTrajectory.js` and `aimAssistOverlay.js`, so they belong to neither of the
 branches that own them. **Branch from `main`, not from a merged feature
 branch**, or the bug comes back.
+
+**`fix/custom-map-geometry` in one line:** the default stadiums are not
+representative, and everything shipped had only ever been validated on them.
+Two independent errors were live on every custom map — decorative geometry
+treated as solid (`cMask = 0` read as "all") and one-way walls treated as solid
+(`bias` not modelled at all). Both are in [DOMAIN.md](DOMAIN.md); the second
+was found only because fixing the first made the validator able to see it.
 
 **What exists:** per-tick extraction, per-map geometry, engine events, NDJSON
 session logging, replay playback, a validated ball predictor, and three
@@ -147,6 +155,31 @@ condition could never be true. Every validator since checks that each drawn
 element can actually fire in the states the overlay will really be in — and
 that check has now caught a second dead branch.
 
+**A validator's fixtures are claims too, and they inherit the bug.** The
+`cMask = 0` error lived in the collision set AND in two synthetic walls in
+`validate-aim-assist.mjs`, written `cMask: 0` by an author who believed that
+meant "all". The check passed because the code under test shared the
+misconception with the scenery it was tested against. When a rule turns out to
+be wrong, grep the fixtures for it before trusting the suite that vouched for
+it — a green suite is evidence about agreement, not about truth.
+
+**Some of the game is not in the game.** A room script enforces rules the
+stadium cannot express by writing player state directly — the defender cap
+that stops players at x = ±405 is a `setDiscProperties` write, not a collider.
+It left no trace in the record for four branches, so a player stopping dead
+with nothing there was explained twice, confidently, and wrongly both times.
+Nothing in the map file could have settled it; one line of the event log did.
+**When the data cannot distinguish two explanations, capture more data rather
+than arguing better.**
+
+**The test environment was the blind spot, not the test.** Three branches of
+ball physics were validated to 1e-13 against the DEFAULT stadium only, and the
+default stadiums carry almost no decorative geometry and no one-way walls. Two
+errors that made the overlays wrong on every custom map were invisible the
+whole time, at full confidence. The validator now runs every map in
+`test-maps/`, which is where the second error surfaced — fixing the first was
+what let the harness reach geometry it had never touched.
+
 **A validator's exclusions are load-bearing claims about what it does NOT
 prove.** `validate-trajectory.mjs` parks every player on purpose and says so
 in a comment, because it is validating ball-vs-geometry. That caveat never
@@ -199,13 +232,31 @@ differed from the obvious reading. Test the mechanism; keep the observation.
 4. **Run the validators** before trusting anything:
    ```bash
    node scripts/validate-zone.mjs analytics-sessions/session-<stamp>.ndjson
-   node scripts/validate-trajectory.mjs
+   node scripts/validate-trajectory.mjs          # default + every map in test-maps/
    node scripts/validate-aim-assist.mjs
+   node scripts/diagnose-map-masks.mjs test-maps/<map>.hbs   # per-map, fast
    ```
    All are deterministic, so their numbers are baselines and any divergence is
-   signal. Current: trajectory p99 `2.43e-13`; aim assist p99 `2.93e-13`, wedge
+   signal. Current: trajectory p99 `1.71e-13` Classic, `1.14e-13` K Futsal Huge,
+   `1.42e-13` K Futsal big; aim assist p99 `2.27e-13`, wedge
    `180/180/89.50/56.44/38.68/24.62`, blockers truncating at tick 21 where the
    engine diverges at tick 21.
+
+   **Drop a new `.hbs` into `test-maps/` and the trajectory validator picks it
+   up.** That is the cheapest guard there is against the whole class of bug
+   that `fix/custom-map-geometry` was: geometry that is fine on Classic and
+   wrong everywhere else.
+
+   `validate-zone.mjs` re-run after the `cMask` correction on a fresh 6v6:
+   **open space 100.00% contained over 151,672 samples**, near-wall 100.00%
+   over 48. The 266 windows where a room script wrote the player's position
+   are reported in their own bucket and do not decide the verdict.
+
+   That 100% is the same number as before the correction and means something
+   different. It used to be reached with the old mask rule filing those
+   windows under contact; it is now reached by attributing them to what
+   actually caused them. **A restored number is not a preserved one** — check
+   which windows moved, not just that the total held.
 
    **Read what each validator excludes before quoting its number.** Check 1 of
    the aim-assist validator parks every player, so it proves nothing about
