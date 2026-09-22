@@ -316,6 +316,76 @@ Filtering hard enough is not a compromise of this principle — it is required b
 [Attention is the binding constraint](#attention-is-the-binding-constraint).
 The two sections say the same thing from opposite ends.
 
+### Rate by the objective, or it is trivia
+
+**The aim of the game was not written down anywhere in this project until
+2026-09-23** — not in this file, not in DOMAIN.md, which describes the physics
+in obsessive detail and never said what anyone was trying to do with it. The
+objective chain now lives in
+[DOMAIN.md § What the game is for](DOMAIN.md#what-the-game-is-for).
+
+It matters because it is the only thing separating a measurement from trivia.
+*You hold the ball 0.4s longer under pressure than in April* means nothing on
+its own; it means something if holding longer costs possession, delays
+progression, or forfeits a shot.
+
+So every proposed measurement faces one question: **which link in the chain
+does this touch?** A metric touching none is trivia, however interesting it
+looks. This is the filter that stops Phase 4 becoming a dashboard nobody acts
+on.
+
+The chain also *defines* value rather than merely motivating it:
+
+> **value(state) = P(we score next | state) − P(they score next | state)**
+
+and a decision is worth however much it moved that number. Progression,
+retention and shot creation are **proxies** for it, useful only because the
+real quantity is harder to measure. Worth knowing they are proxies, because
+proxies get optimised into nonsense when mistaken for the thing itself.
+
+**The real quantity is countable, not modelled.** With a corpus: *of all
+possessions reaching a state like this, how many ended in a goal for us, and
+how many for them.* That is a frequency. The only genuine modelling choice is
+what "a state like this" means — start crude (ball zone, players ahead of the
+ball each side, phase) and refine only if it proves too noisy.
+
+### Describe, do not rate — and when you must order, use dominance
+
+Five things get conflated whenever "rate a decision" comes up:
+
+| | Needs a value model? |
+| --- | --- |
+| **Filter** — these options existed | No, feasibility only |
+| **Describe** — this one progressed 180 units, that one retained possession | No, attributes only |
+| **Rate** — this option was worth 0.31 goals | Yes |
+| **Rank** — A, then B, then C | Yes, or a partial order |
+| **Recommend** — do A | Forbidden; see [Advise, never act](#advise-never-act) |
+
+**Describe carries most of the value**, and rating has a problem beyond cost:
+a single score collapses several attributes into one number, and hiding the
+trade-off is the very thing the principles object to. *Pass left: 0.31* tells
+the player less than *pass left progresses 180 and retains reliably; clearing
+progresses 300 and retains 30% of the time.* The second can be disagreed with.
+
+But description alone is not sufficient, because
+[every filter is an implicit ranking](#advise-never-act). With eight options
+available you cannot show eight, and the aggregate claim *a third option
+existed in 60% of possessions* needs a notion of "better" or it is counting
+worse options too.
+
+**So use the weakest ordering that does the job: dominance.** Flag an option
+only when it beats the one taken on *every* axis — progressed further **and**
+less contested **and** retained more reliably. No weights, no model, and the
+criterion is visible by construction because the axes it won on can be listed.
+
+Most options are genuine trade-offs and will not dominate. Those are not the
+interesting ones. The interesting case is something strictly better going
+unused, which is rarer and much harder to argue with.
+
+Rating proper stays optional and last. If dominated options turn out too rare
+to produce findings, that is real information — and the decision about a value
+model can be made then, rather than assumed now.
+
 ### Enumeration is about search, not sight
 
 **Relocated, not abandoned, by the 2026-09-23 direction change.** The original
@@ -686,6 +756,26 @@ is discarded. What comes *before* the compression is often what is needed.
 | Karakuş & Arkadaş, *Structural Pass Analysis* | Review path only. Descriptive, not predictive. |
 | American Soccer Analysis, *Passing networks* | Topology transfers; spatial averaging must be rejected. |
 | Nycander & Andersson, *Analysis of WrightEagle* (KTH 2013) | Weakest evidence. Subjective video analysis. |
+
+### Not yet reviewed, and it is the gap that matters
+
+**Nothing above answers "how do you rate a decision."** All nine sources are
+about enumerating options or choosing one; none is about what an option is
+*worth*. That question has a substantial literature this project has not
+touched:
+
+| Missing | Why it matters here |
+| --- | --- |
+| **Expected threat (xT)** | Values a state by how often possessions reaching it end in a goal. Estimated by counting, not modelling — exactly the approach [Rate by the objective](#rate-by-the-objective-or-it-is-trivia) needs. |
+| **Expected possession value (EPV)** | The same idea per action rather than per zone: how much did this decision move the scoring probability. |
+| **Expected goals (xG)** | Converts a shot's geometry into a conversion probability — the shot-creation axis, and the one most sensitive to Haxball's small goal and keeper position. |
+| **Pitch control** | Space ownership as a continuous field. Related to dominance regions (item 17) but with an established literature behind it. |
+
+Read these before deriving anything in the same space. The objective chain
+was reconstructed here from first principles and turned out to be the
+foundation of a whole subfield — which is a good sign about the reasoning
+and a bad sign about the reading. The failures documented in that literature
+are cheaper to borrow than to repeat.
 
 ### What transfers
 

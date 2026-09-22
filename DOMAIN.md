@@ -13,6 +13,7 @@ match and can be re-checked with `scripts/diagnose-physics.mjs` and
 
 ## Contents
 
+- [What the game is for](#what-the-game-is-for)
 - [The play surface](#the-play-surface)
 - [Movement physics](#movement-physics)
 - [Ball physics](#ball-physics)
@@ -23,6 +24,60 @@ match and can be re-checked with `scripts/diagnose-physics.mjs` and
 - [Game state and events](#game-state-and-events)
 - [Tactical vocabulary](#tactical-vocabulary)
 - [Pitfalls](#pitfalls)
+
+---
+
+## What the game is for
+
+Written down 2026-09-23. **It had never been stated anywhere in this project**
+— this file described the physics in detail across hundreds of lines and never
+said what anyone was trying to do with them. Everything the tool measures has
+to trace back to here or it is trivia.
+
+**The objective chain**, each link requiring the one after it:
+
+> **score** <- shots from positions that actually convert <- the ball in a
+> dangerous area with a player on it <- progression up the pitch <-
+> possession <- winning it, or not losing it
+
+Defensively, the same chain denied.
+
+This is what makes a measurement meaningful. *Time-to-pressure* earns its
+place because it determines whether the opponent can progress. An unused
+option earns its place if it progressed, retained, or created a shot. A metric
+touching no link is trivia however interesting it looks.
+
+It also gives the definition of value, which is the thing any rating of a
+decision ultimately approximates:
+
+> **value(state) = P(we score next | state) - P(they score next | state)**
+
+See [README.md § Rate by the objective](README.md#rate-by-the-objective-or-it-is-trivia)
+for how that gets estimated and why dominance is used in the meantime.
+
+### Two links are NOT yet verified
+
+Stated as open rather than settled, because the chain was reasoned out rather
+than measured, and **every metric derived from it inherits any error here.**
+That is this project's recurring failure mode, so it is flagged loudly.
+
+**1. What makes an area dangerous in Haxball?** The football answer is zones
+by distance. The likely answer here is **angle to goal and keeper position** —
+the pitch is small, shots come from anywhere, and the goal is narrow relative
+to the surface. This choice defines the shot-creation axis, so it changes
+every downstream finding. Measure it: bin shots by angle, by distance and by
+keeper offset, and see which bin predicts conversion.
+
+**2. Is possession actually the right link?** Football's chain assumes
+retention is valuable. In a 5-a-side box with constant contact that may not
+hold — **territory, or winning the next 50/50, may matter more than keeping
+the ball**, and a counter-attacking side might concede it deliberately. Play
+knowledge already contradicts the naive reading once: chasing a ball you
+cannot win has value through pressure, which no possession model captures.
+Measure it before assuming: do possessions conceded in the opponent half
+actually cost anything?
+
+Until both are measured, treat findings that depend on them as provisional.
 
 ---
 

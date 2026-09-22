@@ -173,10 +173,19 @@ existed in 60% of your possessions and you used it in 8%"* is already a
 lesson, and it needs no value model. Includes the execution measurements in
 [README.md § Measure what cannot be felt](README.md#measure-what-cannot-be-felt).
 
-**Phase 5 — ranking, only if the data supports it.** Saying which option was
-*best* needs values, values need outcomes at volume, and that volume may not
-be reachable by one group of players. Treat as optional. Do not block the
-first four phases on it.
+**Phase 5 — ranking, only if dominance proves too thin.** Saying which option
+was *best* needs values, and values need outcomes at volume. **Do not start
+here.** Use [dominance](README.md#describe-do-not-rate--and-when-you-must-order-use-dominance)
+instead: flag an option only when it beats the one taken on *every* axis —
+progression, retention, shot creation. No weights, no model, criterion visible
+by construction.
+
+Most options are trade-offs and will not dominate, which is fine; the
+interesting case is something strictly better going unused. If that turns out
+too rare to produce findings, *that* is the signal to consider a value model —
+and by then the corpus exists, so the honest version is counting (*of
+possessions reaching a state like this, how many ended in a goal*) rather than
+a learned one. Optional either way. Do not block the first four phases on it.
 
 **Live track, in parallel and deliberately small:** attention direction only.
 One bit, peripheral, near the ball. Nothing that must be read. It has no
@@ -348,6 +357,14 @@ project keeps being bitten by.
 
 Honest gaps, so nobody later mistakes these for settled:
 
+- **Two links in the objective chain are unverified**, and every metric built
+  on them inherits the error: what makes an area *dangerous* in Haxball
+  (probably angle and keeper position rather than distance zones), and whether
+  *possession* is the right link at all in a 5-a-side box where conceding the
+  ball for territory may be sound. Both are measurable and neither has been
+  measured. See
+  [DOMAIN.md § What the game is for](DOMAIN.md#what-the-game-is-for), and
+  treat dependent findings as provisional until they are.
 - **Intent is not recoverable.** The data never says what a player *meant* to
   do, so "did you execute what you intended" is unanswerable. Everything must
   be phrased against outcomes and available options instead.
