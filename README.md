@@ -1,14 +1,96 @@
-# Haxball Live Tactical Overlay
+# Haxball Tactical Analytics
 
-Computer-assisted analysis on top of live Haxball games — line of sight,
-passing lanes, space and commitment — built as a fork of the open-source
-Haxball client.
+Computer-assisted analysis of Haxball games, built as a fork of the
+open-source Haxball client.
 
-The aim is to **show the possibilities and aid decision making**: sharpen what
-a player can consider, never act for them. The tool may filter and rank —
-attention is scarce and an unfiltered dump is worse than useless — but the
-human reads it and makes the move. That distinction drives most of what
-follows.
+*(The repo name and the old title say "live overlay". That predates the
+direction change recorded below and in [PROGRESS.md](PROGRESS.md); the live
+overlay is now the smaller of two tracks, not the product.)*
+
+The aim is to **make the players better**, not to play for them. That is a
+learning goal, and it decides almost every design question that follows —
+because a tool that hands you the answer mid-game improves your play while it
+is switched on and teaches you nothing, which this file has always said:
+*that trains dependence and stops teaching the moment it is switched off.*
+
+So the tool has two jobs on two timescales, and they are not the same product:
+
+| | When | What it does | Bandwidth |
+| --- | --- | --- | --- |
+| **Measure and explain** | between games | which options went unused, what you should practise, how your execution is actually failing | unlimited |
+| **Direct attention** | during play | one thing, now, over there | 1–2 bits |
+
+The between-games track is where the value is, because it is the only one
+with room to explain, and explanation is what makes a lesson yours. The live
+track is not a smaller version of it — it is a different thing entirely, and
+the only live job supported by the evidence is **pointing the eyes**, not
+telling them what to conclude.
+
+**What the tool never does:** improve execution in the moment. Aiming, timing
+and touch are motor skills. No cue helps you perform one, and reading a cue
+competes for the moment in which you would perform it. The tool can measure
+how your execution fails and tell you what to drill; it cannot aim for you and
+should not try.
+
+### And a third job: test what the player already believes
+
+Everything a player knows about this game is a model built from watching it,
+and **perception is excellent at noticing and unreliable at explaining.**
+Pitfall 2 is the worked example: the observation *players stop dead at
+x = ±405* was correct, and two successive explanations of it were wrong, one
+of them sitting in DOMAIN.md marked **Verified** through four branches. What
+actually caused it is invisible — a room script writing positions — so no
+amount of careful watching could ever have settled it.
+
+So a first-class use of the corpus is checking beliefs, not only finding
+unused options. *I think the ball comes off a moving player differently — is
+that true?* DOMAIN.md is already this, done by hand.
+
+---
+
+## What the finished thing looks like
+
+Concretely, so that no future branch mistakes the overlay for the product.
+
+**During play: nothing.** Perhaps a rare spatialised tone when something is
+closing that the player cannot see. That is the whole live product, and its
+smallness is deliberate.
+
+**After a session**, point it at the replay files. It runs headless and
+produces a short list — not statistics, *moments*:
+
+```
+14 moments from tonight (3 games)
+  4x  held under pressure with a first-time option open
+  3x  a teammate arrived unmarked while you were facing away
+  2x  cleared when a retained possession was available
+  5x  shot taken with a better angle one touch away
+```
+
+**Click one.** The existing replay harness jumps there, paused, a second
+before the decision. It plays out, then shows what else was available — which
+lanes were open, who could have reached what, how long there actually was.
+The player judges it: *missed it* / *had a reason*. Ten minutes for a session.
+
+**Occasionally with the team.** The moments about shape rather than
+individual choices, everyone on screen at once. That is how football review
+actually works, and it is what the word *we* in the aim is pointing at.
+
+**Over months**, the measurements that need volume — *you hold the ball 0.4s
+longer under pressure than you did in April* — which nobody can self-assess
+and which say what to drill.
+
+**Whenever wanted**, inquiry mode: a question about the game or about your own
+play, answered from data instead of recollection.
+
+So: **review** (here are the moments worth a second look) and **inquiry**
+(here is a question, answered). Less like a HUD, more like a coach's laptop —
+opened between sessions, argued with, and some of it changes what happens next
+time.
+
+**The acceptance test for everything here: does it change what the player does
+in the next game?** That is the check this project spent four branches without
+having, and switching the overlays off was it being run informally.
 
 ---
 
@@ -19,7 +101,7 @@ Each file has one job, and only one of them goes stale.
 | Document | Scope | Changes when |
 | --- | --- | --- |
 | [PROGRESS.md](PROGRESS.md) | **Where the project is.** What is done, what to do next, what is deferred and why. | every branch |
-| **README.md** (this file) | Design principles, architecture, prior art, and the roadmap — what each possible feature *is* | a principle or an item changes |
+| **README.md** (this file) | The aim, what the finished thing is, design principles, architecture, prior art, and the roadmap — what each possible feature *is* | a principle or an item changes |
 | [DOMAIN.md](DOMAIN.md) | How the game works, verified findings, pitfalls. Branch-agnostic. | something is measured |
 | [README-replay.md](README-replay.md) | `feat/replays` — `.hbr2` playback | never (permanent record) |
 | [README-session-event-capture.md](README-session-event-capture.md) | `feat/session-event-capture` — data layer + physics validation | never (permanent record) |
@@ -135,15 +217,45 @@ Custom maps are not in git. Copy in whatever you actually play on.
 
 Binding, not advisory. A feature that fails these does not ship.
 
+### Filter 0: is the bottleneck information, or execution?
+
+**Asked before the other three, because they all presume the answer is
+information.** If the limiting factor is a motor skill — aiming, timing,
+touch, micro-positioning — then no cue helps, and a cue may actively
+interfere by competing for the moment in which the act is performed.
+
+This would have killed the aim cue on paper. It passes filter 2 honestly:
+composing your own momentum into the kick genuinely is not free to compute.
+But computing it was never the bottleneck. The player still has to place their
+body, orient and release on the right tick, and knowing where the ball *would*
+go does not do any of that for them.
+
+An execution bottleneck is not beyond help — it is beyond *live* help. See
+[Measure what cannot be felt](#measure-what-cannot-be-felt).
+
 ### The three-filter test
 
-A feature must fail at least one filter to earn its place on screen.
+Once filter 0 says the bottleneck is information, a feature must fail at least
+one of these to earn its place on screen.
 
 1. **Is it perceptible?** Can the eye register it directly.
 2. **Is it cheap to derive?** Some things are visible yet expensive to turn
    into a decision.
 3. **Is it attended to?** The camera follows the ball; things can be visible,
    trivial, and still unseen.
+
+**Filter 3 is the live track's entire territory.** Play has repeatedly shown
+that filters 1 and 2 are near-impossible to fail against a skilled player on
+this pitch — the scene is small, fully drawn, and physically simple, and they
+have trained on it for years. What stays available is that the eyes are in one
+place and the decisive thing is in another. Seeing is not the same as
+attending, and a player fixed on the ball is not failing to perceive the
+overlap behind them; they are failing to look.
+
+That is a nudge, and a nudge is one bit: *here, now*. It cannot carry a reason,
+because a reason has to be read (see
+[Live cues are peripheral cues](#live-cues-are-peripheral-cues)). Anything
+wanting to explain itself belongs between games.
 
 | Feature | Perceptible? | Cheap to derive? | Attended? | Draw it? |
 | --- | --- | --- | --- | --- |
@@ -204,6 +316,33 @@ Filtering hard enough is not a compromise of this principle — it is required b
 [Attention is the binding constraint](#attention-is-the-binding-constraint).
 The two sections say the same thing from opposite ends.
 
+### Enumeration is about search, not sight
+
+**Relocated, not abandoned, by the 2026-09-23 direction change.** The original
+justification was *show what is possible so the player decides better now*.
+That justification is dead: a skilled player can already see the options, and
+a list cannot be read mid-scramble anyway.
+
+The surviving justification is different, and it is worth stating precisely
+because the distinction is what makes the feature defensible at all:
+
+> *I could see the options* and *I considered the options* are different
+> claims, and only the first is about perception. With 300ms you evaluate two
+> of four — not because two were invisible, but because there was no time to
+> look.
+
+That is a **search** limit, not a sight limit, and it is not fixable live —
+the time genuinely is not there. What is fixable is the habit behind it, and
+that only becomes visible in aggregate:
+
+> a third option existed in 60% of your possessions; you used it in 8%
+
+No single moment contains that claim, not even watched back. So enumeration
+lives in review, as the input to pattern-finding, and never as a live display.
+Ranking those options is a further step again, deferred and optional — with
+time to think, the player judges the set perfectly well without being told an
+order.
+
 ### The enumeration must include the null action
 
 Holding the ball is a valid option, and leaving it out biases the tool.
@@ -232,6 +371,88 @@ from the other side. Surfacing one cue *is* a filter with a threshold of one,
 and it is the right default — not a reluctant compromise of some purer
 enumeration. The question for any feature is therefore not "how many options
 can we show" but **how few, and on what stated criterion**.
+
+### The ball is the wrong subject
+
+Established the expensive way: three overlays shipped, all validated to
+floating-point noise, all switched off in live play. Every one of them
+describes the ball.
+
+**The ball is the easiest possible subject for human perception**, on every
+axis at once — a single object, no intentions, damped linear motion, and
+permanently centred on screen because the camera is welded to it. Ball-side
+quantities therefore fail filter 2 for nearly everyone, and the failure is not
+observer-relative in the way the rejected "would a strong player know this"
+formulation was. It is a property of the subject, not the viewer.
+
+Two corollaries with teeth:
+
+- **A cue that draws after the action it describes is retrospective**, whatever
+  the maths says. The ball path renders once the kick is spent; the decision it
+  could have informed is over. Retrospective cues can still pass a physics
+  validator perfectly.
+- **Where the ball path stops being free is after the first bounce.** A ball
+  running straight to a stop is read for nothing. A ball off a wall at
+  `bCoef 0.445`, off a post, or off a curved corner segment is not. If that
+  feature is kept live, gate it to *from first contact onward* — which also
+  removes most of its ink.
+
+Everything the eye is bad at concerns *players*: what a body's momentum has
+already taken away from it, how much unpressured time an opponent has, whether
+a lane survives until the ball arrives. None of it is built.
+
+### Measure what cannot be felt
+
+The tool's real advantage over a skilled player is not perception and not
+computation — both of those lost, repeatedly and on the evidence. It is
+**persistence**. It watches all twelve players every tick of every game,
+never tires, never has its attention pulled to the ball, and never forgets.
+
+No human can audit their own five hundred kicks. That makes a whole class of
+finding available to the tool and to nothing else:
+
+- how long you sit in kick range before releasing, and how that changes under
+  pressure
+- whether kicks taken while moving laterally land differently from settled
+  ones
+- what share of your passes reach a teammate when contested versus free, and
+  by how much the misses miss
+- how many options existed per possession, and how many you used
+
+None of that helps in the moment, and none of it is meant to. It tells you
+**what to practise**, which is the mechanism by which execution actually
+improves. It is also the one thing here that survives filter 0: execution
+cannot be coached live, but it can be measured, and measurement is what makes
+it coachable at all.
+
+This is why the ball predictor is not wasted. The machinery that could not
+help you aim is exactly what is needed to judge, afterwards, whether a kick
+went where it should have.
+
+### Live cues are peripheral cues
+
+The camera follows the ball, so the player's fovea is on the ball. **Any cue
+requiring an eye movement costs them the ball**, which makes "quick to read"
+the wrong specification. The right one is *readable without being looked at*.
+
+That sets a hard ceiling. Peripheral vision has poor acuity and poor colour
+discrimination, but is excellent at motion onset and coarse luminance change.
+A live cue must therefore render close to the ball and survive at low
+resolution, which permits roughly **one to two bits**: urgency, safe/unsafe, a
+coarse direction. Not text. Not a thin line that must be traced from end to
+end — that is focal attention, several hundred milliseconds that do not exist
+in a scramble.
+
+This is why the aim cue only lands when play is slow. The information is
+right; the *reading method* is too expensive. The same computation displayed
+as a state signal — this kick, now, is on target or is not — is readable in a
+glance because there is nothing to trace.
+
+A ranked shortlist with visible criteria, which
+[Advise, never act](#advise-never-act) requires, cannot be read in the
+periphery mid-scramble. It is not a live artefact; it belongs in a window
+where the player has time. Those windows exist — kick-off, dead ball, coasting
+far from play — and are underused.
 
 ### A state change with no change in available action is not worth drawing
 
@@ -287,6 +508,51 @@ it is also where clutter costs nothing, so far more can be shown.
 ---
 
 ## Architecture
+
+### What this needs, and what it does not
+
+A standing decision, because the question recurs every time the aim sounds
+ambitious: **this is arithmetic and geometry, not machine learning.** The
+ladder, in the order it should be climbed, and most of it stops at the first
+rung:
+
+| Rung | Used for | Needed? |
+| --- | --- | --- |
+| Geometry + arithmetic | decision points, option enumeration, lane clearance, reachability, every execution measurement | **Yes — Phases 1–4 are entirely this** |
+| Counting and frequency | a first notion of value: *possessions reaching here ended in a goal 12% of the time, elsewhere 3%* | **Yes, with a corpus.** No model required |
+| Supervised model on tabular features | Phase 5 ranking, if counting is too coarse | Only if needed, and only if it stays interpretable |
+| Reinforcement learning | — | **No** |
+| Computer vision | — | **No** |
+
+**No computer vision, ever.** CV exists to recover state from pixels when
+state is unavailable. The engine hands over exact positions, velocities,
+radii and masks at 60 Hz. Professional football analytics fights CV because
+broadcast video is all it has; this project starts with the ground truth that
+industry spends fortunes approximating. Reaching for CV here would be
+throwing away a better input.
+
+**No reinforcement learning**, and the objection is principled before it is
+practical. An RL policy outputs an *action*, with the reasoning discarded —
+which is exactly the collapse [Advise, never act](#advise-never-act) forbids.
+It also learns to *play*, and playing well is not the same skill as
+explaining what a human should have done. A self-play agent that beats you
+teaches you nothing about why.
+
+The practical objection is smaller than it looks, incidentally: node-haxball
+is a fast deterministic simulator, so self-play is technically within reach.
+That makes the principled objection the one that matters. **Accuracy that
+cannot show its criterion is not usable output for this tool**, which rules
+out black boxes whatever they score.
+
+So the design principles do the tool selection. *Show the criterion, not just
+the order* eliminates most of the fancy options before cost is even
+considered — which means simple is not a compromise here. It is required.
+
+The one thing genuinely missing is not an algorithm. It is **volume, and a
+layer that turns physics into football** — possessions, passes, shots,
+turnovers. Per-tick positions are not analysable; nothing tactical can be
+counted until the stream is segmented into events with outcomes. That is
+Phases 1–3, and it is pure derivation from data already captured.
 
 ### Two rates: tick-rate analytics vs render-rate overlay
 
@@ -788,9 +1054,17 @@ value. Read honestly:
   tactical read. It sat outside the numbered list because the list is
   organised around enumeration and this is not an enumeration feature —
   which is worth remembering as a pattern, not treated as an exception.
-- **`feat/reachable-zone` (item 5) is now the bottleneck.** It is written,
-  validated at 100%, still unported, and four separate things wait on it.
-  Nothing else on the list has that profile.
+- **`feat/reachable-zone` (item 5) is the most depended-on unported
+  primitive.** Written, validated at 100%, and four separate things wait on
+  it. Nothing else on the list has that profile — which is an argument about
+  *dependencies*, not about value, and it was read as the latter for three
+  branches.
+- **The whole list is ranked by what unblocks what, not by what a player would
+  use.** That is a real gap in this catalogue, and it is why every item on it
+  should now be asked the [subject](#the-ball-is-the-wrong-subject) and
+  [bandwidth](#live-cues-are-peripheral-cues) questions before it is picked
+  up. An item that cannot be read in the periphery is not a live feature, and
+  an item about the ball probably is not a feature at all.
 
 These are judgments about the items themselves, and they stay here. **What to
 actually build next, and in what order, is in
