@@ -46,7 +46,7 @@ export default function CreateSandbox() {
         });
         room.players[0].isAdmin = true;
         room.setPlayerAdmin(0, true);
-        room.hostPing = 1987987987;
+        room.hostPing = 0; // you are the host of a local sandbox: there is no network, so your ping is 0
         room.setPlayerTeam(0, 1)
         //room.addAuthBan(null);
         room.setTimeLimit(0);
