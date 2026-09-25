@@ -60,6 +60,91 @@ export default function sandboxWrapper(API){
         var cfg = room.config, renderer = room.renderer, activePlugins = room.plugins.filter((obj)=>obj.active);
         var sendPingInterval = setInterval(()=>sandbox.applyEvent(API.EventFactory.ping(sandbox.state.players.map((player)=>player.id==0?room.hostPing:(200*Math.random())|0))), 3000);
 
+        // node-haxball's sandbox.extrapolate(ms) advances its extrapolation copy with ONE physics
+        // step of (ms*0.06) frames. Haxball's physics only resolves collisions once per step, so any
+        // value above ~1 frame lets discs tunnel through walls/players and skips kicks (the
+        // "teleporting / phantom ball"). Network rooms don't have this problem because they step the
+        // copy one frame at a time. We do the same here: take a fresh copy synced to "now" with
+        // extrapolate(0), then advance it frame-by-frame, with one fractional step for the remainder.
+        const FRAMES_PER_MS = 60/1000, MAX_EXTRAPOLATION_FRAMES = 120; // same cap node-haxball uses for network rooms
+
+        // Sub-frame timing. The sandbox only simulates whole 1/60s frames, so the latest simulated
+        // frame can be up to ~16.7ms older than "now". Network rooms add that fraction of a frame when
+        // extrapolating; the sandbox does not, so at extrapolation 0 you'd see a slightly stale state.
+        // The sandbox derives its frame number from real time (frameNo = floor((now - startTime) * rate)),
+        // but doesn't expose startTime. Every observation (now, frameNo) tells us
+        // startTime <= now - frameNo/rate, so the smallest such value seen is a tight estimate of it.
+        var simSpeed = 1, clockOrigin = Infinity;
+        function resetFrameClock(){
+          clockOrigin = Infinity;
+        }
+        function currentSubFrame(){
+          if (!(simSpeed>0)) // simulation frozen: nothing advances between frames
+            return 0;
+          var rate = FRAMES_PER_MS*simSpeed, frameNo = sandbox.currentFrameNo, now = performance.now();
+          var origin = now - frameNo/rate;
+          if (origin<clockOrigin)
+            clockOrigin = origin;
+          var fraction = (now-clockOrigin)*rate - frameNo;
+          return (fraction>0) ? Math.min(fraction, 0.999) : 0;
+        }
+
+        function extrapolateSandbox(extrapolationMS){
+          var extState = sandbox.extrapolate(0); // also advances the real simulation up to the current time
+          var frames = currentSubFrame() + (+extrapolationMS || 0) * FRAMES_PER_MS;
+          if (!(frames>0) || !extState?.gameState) // nothing to add (e.g. negative extrapolation): show the current state (same as network rooms)
+            return extState;
+          if (frames>MAX_EXTRAPOLATION_FRAMES)
+            frames = MAX_EXTRAPOLATION_FRAMES;
+          var wholeFrames = frames|0, remainder = frames-wholeFrames;
+          for (var i=0;i<wholeFrames;i++)
+            extState.runSteps(1);
+          if (remainder>0)
+            extState.runSteps(remainder);
+          return extState;
+        }
+
+        // Haxball's chat indicator event carries an inverted flag on the wire (0 = typing, 1 = not typing).
+        // Network rooms convert it inside node-haxball, but the raw sandbox call does not, so we convert here.
+        const toChatIndicatorValue = (active)=>(typeof active=="boolean" ? (active ? 0 : 1) : active);
+
+        // Sandbox-only typing bubble: the shared ChatBox calls setChatIndicatorActive(true) when the chat
+        // input gains focus and (false) when it loses it. In the sandbox we only show the bubble while that
+        // input actually contains text, by watching the focused input for as long as it stays focused.
+        // Live rooms don't use this wrapper, so their behaviour is unchanged.
+        var chatIndicatorShown = false, watchedChatInput = null;
+        function showLocalChatIndicator(active){
+          if (active==chatIndicatorShown)
+            return;
+          chatIndicatorShown = active;
+          sandbox.setPlayerChatIndicator(toChatIndicatorValue(active), sandbox.controlledPlayerId);
+        }
+        function onWatchedChatInput(){
+          showLocalChatIndicator(!!watchedChatInput && watchedChatInput.value.trim().length>0);
+        }
+        function stopWatchingChatInput(){
+          watchedChatInput?.removeEventListener("input", onWatchedChatInput);
+          watchedChatInput = null;
+        }
+        function setLocalChatIndicator(active){
+          if (!active){
+            stopWatchingChatInput();
+            showLocalChatIndicator(false);
+            return;
+          }
+          var el = (typeof document!="undefined") ? document.activeElement : null;
+          if (el?.tagName!="INPUT"){ // nothing to watch: fall back to "focused = typing"
+            showLocalChatIndicator(true);
+            return;
+          }
+          if (watchedChatInput!=el){
+            stopWatchingChatInput();
+            watchedChatInput = el;
+            el.addEventListener("input", onWatchedChatInput);
+          }
+          onWatchedChatInput(); // e.g. refocusing a box that still has unsent text shows the bubble immediately
+        }
+
         function movePlayersToTeam(fPlayerFilter, teamId=0){
           sandbox.state.players.slice().forEach((player)=>{
             if (!fPlayerFilter(player))
@@ -87,6 +172,7 @@ export default function sandboxWrapper(API){
         }
 
         function finalizeRoom(err){
+          stopWatchingChatInput();
           clearInterval(sendPingInterval);
           room.plugins.forEach((obj)=>{
             obj.finalize?.();
@@ -420,7 +506,7 @@ export default function sandboxWrapper(API){
             get: ()=>token,
             set: (value)=>{
               token = value;
-              _setTimeout(()=>{
+              setTimeout(()=>{
                 room._onRoomLink?.(room.link);
                 room._onRoomTokenChange?.(token);
               }, 20000);
@@ -430,7 +516,7 @@ export default function sandboxWrapper(API){
             get: ()=>recaptchaRequired,
             set: (value)=>{
               recaptchaRequired = value;
-              _onRoomRecaptchaModeChange?.(value);
+              room._onRoomRecaptchaModeChange?.(value);
             }
           },
           name: {
@@ -511,7 +597,7 @@ export default function sandboxWrapper(API){
             room._onRoomPropertiesChange?.(props);
           },
           sendCustomEvent: (type, data, targetId)=>sandbox.sendCustomEvent(type, data, sandbox.controlledPlayerId),
-          sendBinaryCustomEvent: (id, data, targetId)=>sandbox.sendBinaryCustomEvent(type, data, sandbox.controlledPlayerId),
+          sendBinaryCustomEvent: (id, data, targetId)=>sandbox.sendBinaryCustomEvent(id, data, sandbox.controlledPlayerId),
           setPlayerIdentity: (id, data, targetId)=>sandbox.setPlayerIdentity(id, data, sandbox.controlledPlayerId),
           setHandicap: (handicap)=>room._onHandicapChange?.(handicap),
           setSync: (val)=>{ // ko
@@ -553,12 +639,12 @@ export default function sandboxWrapper(API){
             moveRandomSpectatorToTeam((blueCount>redCount)?red:blue);
           },
           sendChat: (chat, targetId)=>sandbox.playerChat(chat, sandbox.controlledPlayerId),
-          sendChatIndicator: (active)=>sandbox.setPlayerChatIndicator(active, sandbox.controlledPlayerId),
+          sendChatIndicator: (active)=>setLocalChatIndicator(!!active),
           sendAnnouncement: (announcement, targetId, color=-1, style="", sound=1)=>sandbox.sendAnnouncement(announcement, color, {"bold": 1, "italic": 2, "small": 3, "small-bold": 4, "small-italic": 5}[style]||0, sound, null, sandbox.controlledPlayerId),
           setDiscProperties: (discId, properties)=>sandbox.setDiscProperties(discId, 0, properties, sandbox.controlledPlayerId),
           setPlayerDiscProperties: (playerId, properties)=>sandbox.setDiscProperties(playerId, 1, properties, sandbox.controlledPlayerId),
           reorderPlayers: (playerIdList, moveToTop)=>sandbox.reorderPlayers(playerIdList, moveToTop, sandbox.controlledPlayerId),
-          extrapolate: (extrapolationMS, ignoreMultipleCalls=false)=>(ignoreMultipleCalls ? sandbox.extrapolate(extrapolationMS) : (sandbox.state.ext || sandbox.extrapolate(extrapolationMS))),
+          extrapolate: (extrapolationMS, ignoreMultipleCalls=false)=>(ignoreMultipleCalls ? extrapolateSandbox(extrapolationMS) : (sandbox.state.ext || extrapolateSandbox(extrapolationMS))),
           startGame: ()=>sandbox.startGame(sandbox.controlledPlayerId),
           stopGame: ()=>sandbox.stopGame(sandbox.controlledPlayerId),
           pauseGame: ()=>(sandbox.state.gameState && sandbox.setGamePaused(sandbox.state.gameState.pauseGameTickCounter!=120, sandbox.controlledPlayerId)),
@@ -574,7 +660,7 @@ export default function sandboxWrapper(API){
           kickPlayer: (playerId, reason, isBanning)=>sandbox.kickPlayer(playerId, reason, isBanning, sandbox.controlledPlayerId),
           setAvatar: (avatar)=>sandbox.setPlayerAvatar(false, avatar, sandbox.controlledPlayerId),
           setPlayerAvatar: (id, value, headless)=>sandbox.setPlayerAvatar(headless, value, id),
-          setChatIndicatorActive: (active)=>sandbox.setPlayerChatIndicator(active, sandbox.controlledPlayerId),
+          setChatIndicatorActive: (active)=>setLocalChatIndicator(!!active),
           setTeamColors: (teamId, angle, ...colors)=>sandbox.setTeamColors(teamId, angle, colors, sandbox.controlledPlayerId),
           setUnlimitedPlayerCount: (on)=>(unlimitedPlayerCount=on),
           setFakePassword: (on)=>(fakePassword=on),
@@ -613,7 +699,16 @@ export default function sandboxWrapper(API){
 						room.libraries.forEach((library)=>library.useSnapshot?.(snapshot.libraries[library.name]))
 						room.plugins.forEach((plugin)=>plugin.useSnapshot?.(snapshot.plugins[plugin.name]))
 					},
-          setSimulationSpeed: (speed)=>sandbox.setSimulationSpeed(speed),
+          setSimulationSpeed: (speed)=>{
+            sandbox.setSimulationSpeed(speed);
+            if (speed>=0){ // node-haxball ignores negative speeds
+              if (speed>0)
+                simSpeed = speed;
+              else
+                simSpeed = 0;
+              resetFrameClock(); // the frame counter is rescaled on a speed change, so re-learn the timing
+            }
+          },
           runSteps: (steps)=>sandbox.runSteps(steps),
           exportStadium: ()=>sandbox.state.exportStadium(),
           getKeyState: ()=>keyState,
@@ -635,7 +730,7 @@ export default function sandboxWrapper(API){
           },
           fakeSendPlayerInput: (input, byId)=>sandbox.playerInput(input, byId),
           fakeSendPlayerChat: (msg, byId)=>sandbox.playerChat(msg, byId),
-          fakeSetPlayerChatIndicator: (value, byId)=>sandbox.setPlayerChatIndicator(value, byId),
+          fakeSetPlayerChatIndicator: (value, byId)=>sandbox.setPlayerChatIndicator(toChatIndicatorValue(value), byId),
           fakeSetPlayerAvatar: (value, byId)=>sandbox.setPlayerAvatar(false, value, byId),
           fakeSetStadium: (value, byId)=>sandbox.setCurrentStadium(value, byId),
           fakeStartGame: (byId)=>sandbox.startGame(byId),
